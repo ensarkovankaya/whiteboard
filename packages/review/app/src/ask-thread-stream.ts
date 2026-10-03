@@ -56,12 +56,13 @@ async function followThread(
   }
 }
 
-/** Follows one thread until the panel lets go of it. */
+/** Follows one thread until the panel lets go of it. Letting go leaves the
+ * agent running: closing its Ask is what ends it. */
 export function useThread(session: ReviewSession, threadId: string | null) {
   const [thread, setThread] = useState<AskThreadState | null>(null);
   const [lost, setLost] = useState(false);
-  // Each new version of the review is a new session object; the agent
-  // belongs to the panel, so only the panel closing ends it.
+  // Each new version of the review is a new session object; following the
+  // thread does not start again for it.
   const current = useLatest(session);
 
   useEffect(() => {
@@ -70,10 +71,6 @@ export function useThread(session: ReviewSession, threadId: string | null) {
     const abort = new AbortController();
 
     setLost(false);
-
-    // Set once the thread is gone from the server, which then has nothing
-    // to close; a late close could end the same thread reopened.
-    let gone = false;
 
     void (async () => {
       try {
@@ -94,20 +91,10 @@ export function useThread(session: ReviewSession, threadId: string | null) {
       }
 
       if (abort.signal.aborted) return;
-      gone = true;
       setLost(true);
     })();
 
-    return () => {
-      abort.abort();
-
-      if (gone) return;
-      // The agent process belongs to this panel; closing the panel ends it.
-      // The conversation stays saved, to reopen from the history.
-      void current.current
-        .fetch(`/ask/${threadId}/close`, { method: "POST", keepalive: true })
-        .catch(() => {});
-    };
+    return () => abort.abort();
   }, [current, threadId]);
 
   // A thread the panel lost is not running any more, whatever it last said.
