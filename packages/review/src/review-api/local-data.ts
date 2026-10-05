@@ -566,7 +566,6 @@ export class LocalReviewData {
       watch?: typeof watch;
       /** gh, git and GitHub API access for pull request targets. */
       pullRequests?: PullRequestDeps;
-      fetchedDiffr?: string;
     } = {},
   ) {
     if (options.manageWorkspaces !== false)
@@ -601,7 +600,6 @@ export class LocalReviewData {
         },
         paths: file === undefined ? undefined : [file],
         signal,
-        fetchedDiffr: this.options.fetchedDiffr,
       });
 
       return;
@@ -626,7 +624,6 @@ export class LocalReviewData {
       comparison: { kind: "trees", base: pins.base, head: pins.head },
       paths: file === undefined ? undefined : [file],
       signal,
-      fetchedDiffr: this.options.fetchedDiffr,
     });
   }
 
@@ -1781,7 +1778,6 @@ export function openLocalReviewStore(
     manageWorkspaces?: boolean;
     watch?: typeof watch;
     pullRequests?: PullRequestDeps;
-    fetchedDiffr?: string;
   } = {},
 ) {
   const store: ReviewStore = new ReviewStore(databasePath, {

@@ -65,7 +65,7 @@
     "@agentclientprotocol/claude-agent-acp": "0.84.0",
     "@agentclientprotocol/codex-acp": "2.0.0",
     "@agentclientprotocol/sdk": "1.5.1",
-    "@dev.fast/diffr": "0.1.10",
+    "@dev.fast/diffr": "0.1.11",
     "@hono/node-server": "2.0.12",
     "@img/sharp-wasm32": "0.35.4",
     "@modelcontextprotocol/sdk": "1.30.0",

@@ -1,15 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { JsonValue } from "@dev.fast/json";
 import { afterEach, expect, test, vi } from "vitest";
 
-import {
-  type StructuralDiffRequest,
-  diffrExecutable,
-  structuralDiff,
-} from "./structural-diff";
+import { type StructuralDiffRequest, structuralDiff } from "./structural-diff";
 
 const roots: string[] = [];
 
@@ -373,19 +369,6 @@ test("coverage can detach after initial files while summaries continue for later
   }
 });
 
-test("uses the bundled binary only when present and no override is set", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "review-bundled-diffr-"));
-  roots.push(root);
-  vi.stubEnv("REVIEW_DIFFR_BINARY", "");
-  expect(diffrExecutable(root)).toBe("diffr");
-  await mkdir(path.join(root, "bin"));
-  const binary = path.join(root, "bin", "diffr");
-  await writeFile(binary, "#!/bin/sh\n", { mode: 0o755 });
-  expect(diffrExecutable(root)).toBe(binary);
-  vi.stubEnv("REVIEW_DIFFR_BINARY", "/elsewhere/diffr");
-  expect(diffrExecutable(root)).toBe("/elsewhere/diffr");
-});
-
 test("keeps the ten most recently read idle comparisons", async () => {
   const { StructuralComparisons } = await import("./structural-comparisons.js");
 
@@ -417,25 +400,4 @@ test("keeps the ten most recently read idle comparisons", async () => {
   } finally {
     cache.close();
   }
-});
-
-test("looks up diffr: override, package bin, then the fetched copy, then PATH", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "review-diffr-lookup-"));
-  roots.push(root);
-  const fetched = path.join(root, "state", "diffr");
-
-  const lookup = (env: NodeJS.ProcessEnv = {}) =>
-    diffrExecutable(root, env, fetched);
-
-  expect(lookup()).toBe("diffr");
-  await mkdir(path.dirname(fetched));
-  await writeFile(fetched, "#!/bin/sh\n", { mode: 0o755 });
-  expect(lookup()).toBe(fetched);
-  await mkdir(path.join(root, "bin"));
-  const bundled = path.join(root, "bin", "diffr");
-  await writeFile(bundled, "#!/bin/sh\n", { mode: 0o755 });
-  expect(lookup()).toBe(bundled);
-  expect(lookup({ REVIEW_DIFFR_BINARY: "/elsewhere/diffr" })).toBe(
-    "/elsewhere/diffr",
-  );
 });

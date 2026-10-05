@@ -1,17 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { createInterface } from "node:readline";
 
+import { diffrBinaryPath } from "@dev.fast/diffr";
 import {
   STRUCTURAL_DIFF_WIRE_VERSION,
   type StructuralDiffEvent,
   type StructuralProblem,
   decodeStructuralDiffEvent,
 } from "@dev.fast/review-protocol";
-import { findReviewPackageRoot } from "@review/package-paths";
-
-import { installedFullDiffr } from "./diffr-languages.js";
 
 export type DiffComparison =
   | { kind: "trees"; base: string; head: string }
@@ -24,38 +20,15 @@ export interface StructuralDiffRequest {
   comparison: DiffComparison;
   paths?: readonly string[];
   signal: AbortSignal;
-  fetchedDiffr?: string;
 }
 
-export function fetchedDiffrPath(stateDir: string) {
-  return path.join(stateDir, "review-tools", "diffr-fetch", "diffr");
-}
-
-export function diffrExecutable(
-  packageRoot = findReviewPackageRoot(import.meta.url),
-  env: NodeJS.ProcessEnv = process.env,
-  fetched?: string,
-): string {
-  if (env.REVIEW_DIFFR_BINARY) return env.REVIEW_DIFFR_BINARY;
-
-  const full = installedFullDiffr(packageRoot);
-
-  if (full) return full;
-
-  const bundled = path.join(
-    packageRoot,
-    "bin",
-    process.platform === "win32" ? "diffr.exe" : "diffr",
-  );
-
-  if (existsSync(bundled)) return bundled;
-
-  return fetched && existsSync(fetched) ? fetched : "diffr";
+export function diffrExecutable(env: NodeJS.ProcessEnv = process.env): string {
+  return env.REVIEW_DIFFR_BINARY || diffrBinaryPath() || "diffr";
 }
 
 export function diffrMissingError(executable = diffrExecutable()): Error {
   return new Error(
-    `Cannot find diffr at ${executable}. Whiteboard Desktop bundles it at bin/diffr under its runtime; in a checkout, run \`pnpm --filter @dev.fast/whiteboard ensure:diffr\` or install diffr on PATH, or set REVIEW_DIFFR_BINARY to its executable.`,
+    `Cannot find diffr at ${executable}. @dev.fast/diffr installs it on macOS, glibc Linux and Windows x64; elsewhere, install diffr on PATH or set REVIEW_DIFFR_BINARY to its executable.`,
   );
 }
 
@@ -97,7 +70,7 @@ export async function* structuralDiff(
 
   // The host inherits its own environment and runs from the repository, so
   // diffr reads the user's config and keys exactly as it would from a shell.
-  const executable = diffrExecutable(undefined, undefined, input.fetchedDiffr);
+  const executable = diffrExecutable();
   console.info(`[Review] structural diff: ${executable} ${args.join(" ")}`);
 
   const child = spawn(executable, args, {
