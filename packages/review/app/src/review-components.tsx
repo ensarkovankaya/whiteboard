@@ -87,6 +87,7 @@ function ReviewPanelFrame({
   onClose,
   onEscape = onClose,
   closeLabel,
+  closeRef,
   titleAccessory,
   headerActions,
   floatingFooter,
@@ -103,6 +104,7 @@ function ReviewPanelFrame({
   /** What Escape does; closing, unless the panel says otherwise. */
   onEscape?: () => void;
   closeLabel: string;
+  closeRef?: Ref<HTMLButtonElement>;
   titleAccessory?: ReactNode;
   /** Buttons beside the close button. */
   headerActions?: ReactNode;
@@ -178,6 +180,7 @@ function ReviewPanelFrame({
         <div {...stylex.props(panelStyles.actions)}>
           {headerActions}
           <IconButton
+            ref={closeRef}
             size="large"
             xstyle={panelStyles.close}
             onClick={onClose}
@@ -511,6 +514,7 @@ function AskHost() {
   });
 
   const [warning, setWarning] = useState(false);
+  const closeButton = useRef<HTMLButtonElement>(null);
 
   // A new view is a new conversation, which has said nothing yet.
   const [shownKey, setShownKey] = useState(ask?.key);
@@ -531,6 +535,7 @@ function AskHost() {
   const closeWarning =
     warning && report.busy && shown !== "pill" ? (
       <AskCloseWarning
+        anchor={closeButton}
         agentName={report.presence.agentName}
         onMinimize={() => {
           setWarning(false);
@@ -576,6 +581,7 @@ function AskHost() {
           onClose={close}
           onEscape={warning ? () => setWarning(false) : close}
           closeLabel="Close Ask"
+          closeRef={closeButton}
           headerActions={
             <>
               {actions}
@@ -612,6 +618,7 @@ function AskHost() {
             <div ref={setHeader} {...stylex.props(panelStyles.title)} />
           }
           onClose={close}
+          closeRef={closeButton}
         >
           {closeWarning}
           <AskSlot node={node} />
