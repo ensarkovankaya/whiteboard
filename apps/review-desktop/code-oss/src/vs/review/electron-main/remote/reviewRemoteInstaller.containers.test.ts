@@ -147,6 +147,7 @@ test("an install has the adapters but not the bundled agent binaries; images dec
 	assert.equal(await inContainer("node", `test -f ${modules}/@agentclientprotocol/codex-acp/dist/index.js && echo yes`), "yes");
 	assert.equal(await inContainer("node", `test -f ${modules}/@agentclientprotocol/claude-agent-acp/dist/index.js && echo yes`), "yes");
 	assert.equal(await inContainer("node", `ls -d ${modules}/@openai/codex-* ${modules}/@anthropic-ai/claude-agent-sdk-* 2>/dev/null | wc -l`), "0");
+	assert.equal(await inContainer("node", `test -x ${modules}/@dev.fast/diffr-linux-*/diffr && echo yes`), "yes");
 	assert.equal(await version("node"), VERSION);
 
 	await inContainer(
@@ -155,7 +156,6 @@ test("an install has the adapters but not the bundled agent binaries; images dec
 	);
 	t.after(() => inContainer("node", "~/.local/bin/whiteboard server stop; rm -rf ~/repo"));
 	const attach = JSON.parse((await inContainer("node", "~/.local/bin/whiteboard remote attach --json")).split("\n").find((line) => line.startsWith("{"))!);
-	assert.equal(attach.diffr, true);
 	const api = async (method: string, path: string, body?: unknown) =>
 		JSON.parse((await run("docker", ["exec", "-u", "dev", `wb-test-${runId}-node`, "node", "--input-type=module", "-e", FETCH, attach.url, attach.token, method, `/reviews-api${path}`, JSON.stringify(body ?? null)])).stdout);
 	const [base, head] = (await inContainer("node", "cd ~/repo && git rev-parse HEAD~1 HEAD")).split("\n");
@@ -196,6 +196,7 @@ test("a sealed host gets Node by upload and the dependencies through the relay",
 		{ step: "package", via: "upload" },
 	]);
 	assert.equal(await version("sealed"), VERSION);
+	assert.match(await inContainer("sealed", `~/.dev/whiteboard-remote/versions/${VERSION}/node_modules/@dev.fast/diffr-linux-*/diffr --version`), /^diffr /);
 	assert.equal(await inContainer("sealed", "ss -Htln | grep -c 127.0.0.1: || true"), "0");
 });
 

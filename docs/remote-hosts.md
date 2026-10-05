@@ -110,8 +110,7 @@ is under that directory instead of `~/.dev`, as is everything below that
 Desktop and the VS Code server keep there.
 
 As before, the review server keeps its reviews in `~/.dev`
-(`review-api.db` and its companion files), and the structural diff's `diffr`
-in `~/.dev/review-tools/`.
+(`review-api.db` and its companion files).
 
 ### Updates
 

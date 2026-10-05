@@ -56,7 +56,6 @@ async function tarball(dir: string, cli: string): Promise<{ file: string; integr
 
 const CLI = `const [a, b] = process.argv.slice(2);
 if (a === "version") console.log(JSON.stringify({ event: "version", version: "${VERSION}" }));
-else if (a === "remote" && b === "diffr") console.log(JSON.stringify({ event: "remote.diffr", diffr: false }));
 else console.log("ran " + process.argv.slice(2).join(" "));
 `;
 

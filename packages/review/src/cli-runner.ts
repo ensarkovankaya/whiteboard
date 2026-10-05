@@ -605,7 +605,6 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
       attach = await remoteAttach({
         stateDir,
         env,
-        stderr: input.stderr,
         groups: options.groups?.split(",").map((group) => group.trim()),
         replace: options.replace,
       });
@@ -634,7 +633,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     input.stdout.write(
       options.json
         ? `${REVIEW_REMOTE_ATTACH_BEGIN}\n${JSON.stringify(attach)}\n${REVIEW_REMOTE_ATTACH_END}\n`
-        : `Whiteboard server ${attach.startedServer ? "started" : "already running"} at ${attach.url}\nStructural diff: ${attach.diffr ? "available" : "unavailable (no diffr)"}\nLanguage features: ${attach.languageServer ? `VS Code server on port ${attach.languageServer.port}` : `unavailable (${attach.languageServerDetail})`}\n`,
+        : `Whiteboard server ${attach.startedServer ? "started" : "already running"} at ${attach.url}\nLanguage features: ${attach.languageServer ? `VS Code server on port ${attach.languageServer.port}` : `unavailable (${attach.languageServerDetail})`}\n`,
     );
   });
 
@@ -678,40 +677,6 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
             .join(""),
     );
     state.exitCode = result.failed.length > 0 ? 1 : 0;
-  });
-
-  configureJsonOutput(
-    remote
-      .command("diffr")
-      .description("Structural diff on this host")
-      .command("ensure")
-      .description(
-        "Fetch diffr for this platform unless a current copy is present",
-      )
-      .option(
-        "--state-dir <path>",
-        "directory for saved reviews and server discovery",
-      ),
-    "plain",
-  ).action(async (_options, command: Command) => {
-    const options = command.optsWithGlobals<{
-      stateDir?: string;
-      json?: boolean;
-    }>();
-
-    const { ensureDiffr } = await import("./remote-attach.js");
-
-    const diffr = await ensureDiffr({
-      stateDir: reviewServerStateDir(authoringEnv(options.stateDir)),
-      env,
-      stderr: input.stderr,
-    });
-
-    input.stdout.write(
-      options.json
-        ? `${JSON.stringify({ event: "remote.diffr", diffr })}\n`
-        : `Structural diff: ${diffr ? "available" : "unavailable (no diffr)"}\n`,
-    );
   });
 
   configureJsonOutput(

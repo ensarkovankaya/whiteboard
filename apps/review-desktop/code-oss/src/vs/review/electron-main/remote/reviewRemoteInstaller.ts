@@ -11,7 +11,6 @@ import { runSsh, type RunResult, type SpawnSsh, type SshChildProcess } from "./r
 import {
 	cleanupScript,
 	completeScript,
-	diffrScript,
 	downloadScript,
 	finishScript,
 	lockScript,
@@ -49,7 +48,6 @@ export const REVIEW_REMOTE_INSTALL_TIMEOUTS = {
 	step: 30_000,
 	download: 15 * 60_000,
 	npm: 10 * 60_000,
-	diffr: 60_000,
 	lockWait: REVIEW_REMOTE_LOCK_STALE_SECONDS * 1000,
 	lockStale: REVIEW_REMOTE_LOCK_STALE_SECONDS * 1000,
 	lockPoll: 2_000,
@@ -133,7 +131,7 @@ export async function installRemote(input: ReviewRemoteInstallInput): Promise<Re
 	}
 
 	async function alreadyComplete(): Promise<ReviewRemoteInstallResult | undefined> {
-		const checked = await run("checking the installed version", completeScript(context, { version: input.version, integrity }), timeouts.diffr).catch((error: unknown) => {
+		const checked = await run("checking the installed version", completeScript(context, { version: input.version, integrity })).catch((error: unknown) => {
 			if (signal.aborted) throw error;
 			return undefined;
 		});
@@ -210,10 +208,7 @@ export async function installRemote(input: ReviewRemoteInstallInput): Promise<Re
 		});
 	}
 
-	async function finish(paths: ReviewRemoteInstallResult): Promise<ReviewRemoteInstallResult> {
-		await run("fetching diffr", diffrScript(context, { launcher: `${reviewRemoteVersionDir(probe.root, input.version)}/whiteboard` }), timeouts.diffr).catch((error: unknown) => {
-			if (signal.aborted) throw error;
-		});
+	function finish(paths: ReviewRemoteInstallResult): ReviewRemoteInstallResult {
 		input.onProgress({ step: "done", cliPath: paths.cliPath });
 		return paths;
 	}
@@ -243,6 +238,7 @@ export async function installRemote(input: ReviewRemoteInstallInput): Promise<Re
 			"installing the package",
 			packageInstallScript(context, {
 				version: input.version,
+				target: input.target,
 				sha512,
 				node,
 				npm,

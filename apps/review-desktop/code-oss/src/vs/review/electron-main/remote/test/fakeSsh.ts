@@ -84,7 +84,7 @@ const connectedOutput = (input: string) =>
 	`${JSON.stringify({ event: "connect.run", agents: [...input.matchAll(/'(claude|codex|opencode|pi)'/g)].map(([, id]) => ({ id, name: id, connected: true, output: "" })) })}\n`;
 
 export const attachOutput = (port: number, token = "remote-token", extra: Record<string, unknown> = {}) =>
-	`WHITEBOARD-REMOTE-BEGIN\n${JSON.stringify({ event: "remote.attach", version: "0.1.6", commit: "abc", serverId: FAKE_SERVER_ID, url: `http://127.0.0.1:${port}`, token, startedServer: true, diffr: true, ...extra })}\nWHITEBOARD-REMOTE-END\n`;
+	`WHITEBOARD-REMOTE-BEGIN\n${JSON.stringify({ event: "remote.attach", version: "0.1.6", commit: "abc", serverId: FAKE_SERVER_ID, url: `http://127.0.0.1:${port}`, token, startedServer: true, ...extra })}\nWHITEBOARD-REMOTE-END\n`;
 
 export const probeOutput = (probe: Partial<Record<string, unknown>> = {}) =>
 	`${REVIEW_REMOTE_PROBE_BEGIN}\n${JSON.stringify({

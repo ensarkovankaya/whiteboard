@@ -245,7 +245,7 @@ test("a reattach drops both old forwards", async (t) => {
 const PENDING_DETAIL = "Installing the language extensions on this host; they will be available on the next connection.";
 
 const pendingOutput = (port: number) =>
-	`WHITEBOARD-REMOTE-BEGIN\n${JSON.stringify({ event: "remote.attach", version: "0.1.6", commit: "abc", serverId: FAKE_SERVER_ID, url: `http://127.0.0.1:${port}`, token: "remote-token", startedServer: false, diffr: true, languageServer: null, languageServerDetail: PENDING_DETAIL, languageServerPending: true })}\nWHITEBOARD-REMOTE-END\n`;
+	`WHITEBOARD-REMOTE-BEGIN\n${JSON.stringify({ event: "remote.attach", version: "0.1.6", commit: "abc", serverId: FAKE_SERVER_ID, url: `http://127.0.0.1:${port}`, token: "remote-token", startedServer: false, languageServer: null, languageServerDetail: PENDING_DETAIL, languageServerPending: true })}\nWHITEBOARD-REMOTE-END\n`;
 
 test("a VS Code server that stopped answering is not handed out, and the host attaches again", async (t) => {
 	const stopped: Server = createServer((request, response) => response.end(request.url === "/version" ? COMMIT : ""));
