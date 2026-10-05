@@ -1,4 +1,3 @@
-import type http from "node:http";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
@@ -13,6 +12,7 @@ import {
   parseJsonText,
 } from "@dev.fast/review-protocol";
 import { Hono } from "hono";
+import type { Dispatcher } from "undici";
 import { z } from "zod";
 
 import { StreamLimitError, readBoundedStream } from "./bounded-stream.js";
@@ -21,9 +21,9 @@ import { DEFAULT_MAX_REQUEST_BYTES } from "./http-json.js";
 import {
   FIRST_BYTE_TIMEOUT_MS,
   type GatewayRemote,
-  NO_ANSWER,
   UUID,
   createGatewayHosts,
+  errorCode,
   errorText,
   readBody,
   remoteHeaders,
@@ -221,26 +221,20 @@ export function createReviewGateway(input: {
   const streaming = new Map<AbortController, GatewayRemote>();
 
   async function ownership(remote: GatewayRemote, reviewId: string) {
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), FIRST_BYTE_TIMEOUT_MS);
-
     try {
       const response = await send(remote, {
         method: "GET",
         path: `/reviews-api/${encodeURIComponent(reviewId)}/activity`,
         headers: remoteHeaders(remote),
-        signal: abort.signal,
       });
 
-      response.resume();
+      await response.body.dump();
 
       return response.statusCode;
     } catch (error) {
-      hosts.failed(remote, abort.signal.aborted ? NO_ANSWER : errorText(error));
+      hosts.failed(remote, errorText(error));
 
       return undefined;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -371,31 +365,26 @@ export function createReviewGateway(input: {
     // The laptop's token never leaves the laptop, in a header or the query.
     if (url.searchParams.has("token")) url.searchParams.delete("token");
 
-    const headers: http.OutgoingHttpHeaders = remoteHeaders(remote);
+    const headers: Record<string, string> = remoteHeaders(remote);
 
     request.headers.forEach((value, key) => {
       if (!DROPPED_REQUEST_HEADERS.has(key)) headers[key] = value;
     });
 
-    const abort = new AbortController();
-    const leave = () => abort.abort();
-    request.signal.addEventListener("abort", leave, { once: true });
-
-    let timedOut = false;
-
     const limit = route?.slow
       ? (input.slowRouteMs ?? SLOW_ROUTE_TIMEOUT_MS)
       : FIRST_BYTE_TIMEOUT_MS;
 
-    const firstByte = setTimeout(() => {
-      timedOut = true;
-      abort.abort();
-    }, limit);
+    const snapshotRequest =
+      route?.path === "" && url.searchParams.get("full") === "true";
+
+    const whole = snapshotRequest || route?.wholeBody === true;
+    const abort = new AbortController();
 
     // SAFETY: Node's Request body is its own web stream; the DOM type only
     // names the same object.
     const stream = request.body as WebReadableStream | null;
-    let response: http.IncomingMessage;
+    let response: Dispatcher.ResponseData;
 
     try {
       response = await send(remote, {
@@ -403,16 +392,16 @@ export function createReviewGateway(input: {
         path: `${url.pathname}${url.search}`,
         headers,
         body: options.body ?? (stream ? Readable.fromWeb(stream) : undefined),
-        signal: abort.signal,
+        signal: AbortSignal.any([request.signal, abort.signal]),
+        headersTimeout: limit,
+        ...(whole && { bodyTimeout: BODY_IDLE_MS }),
       });
     } catch (error) {
-      request.signal.removeEventListener("abort", leave);
+      const timedOut = errorCode(error) === "UND_ERR_HEADERS_TIMEOUT";
 
-      const reason = !timedOut
-        ? errorText(error)
-        : route?.slow
-          ? `it did not answer within ${limit / 1_000} seconds`
-          : NO_ANSWER;
+      const reason = timedOut
+        ? `it did not answer within ${limit / 1_000} seconds`
+        : errorText(error);
 
       if (!route?.slow && !request.signal.aborted) hosts.failed(remote, reason);
 
@@ -420,19 +409,13 @@ export function createReviewGateway(input: {
         ok: false,
         error: `${remote.alias} did not answer: ${reason}.`,
       });
-    } finally {
-      clearTimeout(firstByte);
     }
 
-    response.on("close", () =>
-      request.signal.removeEventListener("abort", leave),
-    );
-
-    const status = response.statusCode ?? 502;
+    const status = response.statusCode;
 
     // A review server never redirects; a remote must not steer the UI.
     if (status >= 300 && status < 400 && status !== 304) {
-      response.destroy();
+      await response.body.dump();
       log(`Refused ${remote.alias}'s redirect (${status}).`);
 
       return answer(remote.alias, 502, {
@@ -456,37 +439,29 @@ export function createReviewGateway(input: {
 
     out.set(REVIEW_HOST_HEADER, remote.alias);
 
-    const snapshot =
-      route?.path === "" &&
-      status === 200 &&
-      url.searchParams.get("full") === "true";
+    const snapshot = snapshotRequest && status === 200;
 
     if (snapshot || route?.wholeBody) {
-      let cut: string | undefined;
-
-      const cutAfter = (ms: number, reason: string) =>
-        setTimeout(() => {
-          cut = reason;
-          abort.abort();
-        }, ms);
-
-      let idle = cutAfter(BODY_IDLE_MS, STALLED);
-      const whole = cutAfter(BODY_MAX_MS, TOO_LONG);
       let body: Buffer;
 
       try {
-        body = await readBody(response, PATH_ROUTE_MAX_BYTES, () => {
-          clearTimeout(idle);
-          idle = cutAfter(BODY_IDLE_MS, STALLED);
-        });
+        body = await readBody(
+          response.body,
+          PATH_ROUTE_MAX_BYTES,
+          AbortSignal.timeout(BODY_MAX_MS),
+        );
       } catch (error) {
+        const cut =
+          errorCode(error) === "UND_ERR_BODY_TIMEOUT"
+            ? STALLED
+            : error instanceof DOMException && error.name === "TimeoutError"
+              ? TOO_LONG
+              : undefined;
+
         return answer(remote.alias, cut ? 504 : 502, {
           ok: false,
           error: `${remote.alias} did not answer: ${cut ?? errorText(error)}.`,
         });
-      } finally {
-        clearTimeout(idle);
-        clearTimeout(whole);
       }
 
       if (snapshot) {
@@ -556,17 +531,17 @@ export function createReviewGateway(input: {
     }
 
     if (request.method === "HEAD" || status === 204 || status === 304) {
-      response.resume();
+      await response.body.dump();
 
       return new Response(null, { status, headers: out });
     }
 
     streaming.set(abort, remote);
-    response.on("close", () => streaming.delete(abort));
+    response.body.on("close", () => streaming.delete(abort));
 
     // SAFETY: Node's Response takes its own web stream; the DOM type only
     // names the same object.
-    const body = Readable.toWeb(response) as ReadableStream<Uint8Array>;
+    const body = Readable.toWeb(response.body) as ReadableStream<Uint8Array>;
 
     return new Response(body, { status, headers: out });
   }
