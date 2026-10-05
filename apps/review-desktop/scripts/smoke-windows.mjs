@@ -207,7 +207,7 @@ export async function smokeWindows(app, evidence) {
         assert.match(version, /\d+\.\d+\.\d+/);
 
         const diffr = execFileSync(
-          path.join(runtime, "bin/diffr.exe"),
+          path.join(runtime, "node_modules/@dev.fast/diffr-win32-x64/diffr.exe"),
           ["--version"],
           { encoding: "utf8", timeout: 30000 },
         );
@@ -251,7 +251,7 @@ export async function smokeWindows(app, evidence) {
         const head = git("rev-parse", "HEAD").trim();
 
         const stream = execFileSync(
-          path.join(runtime, "bin/diffr.exe"),
+          path.join(runtime, "node_modules/@dev.fast/diffr-win32-x64/diffr.exe"),
           [
             "--repo",
             repository,

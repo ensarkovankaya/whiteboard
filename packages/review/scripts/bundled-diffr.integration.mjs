@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { build } from "tsdown";
 import { afterAll, beforeAll, describe, test } from "vitest";
 
-import { stageDiffrBinary } from "../../../apps/review-desktop/scripts/stage-review-runtime.mjs";
 import {
   cleanupTempDirs,
   gitRepository,
@@ -22,7 +22,26 @@ let structuralDiff,
   saveDiffrSummarizer,
   testDiffrSummarizer;
 
-const source = path.resolve(import.meta.dirname, "../bin/diffr");
+const diffrPackage = path.dirname(
+  createRequire(import.meta.url).resolve("@dev.fast/diffr/package.json"),
+);
+
+const platformPackage = path.dirname(
+  createRequire(path.join(diffrPackage, "package.json")).resolve(
+    `@dev.fast/diffr-${process.platform}-${process.arch}/package.json`,
+  ),
+);
+
+const source = path.join(platformPackage, "diffr");
+
+async function stageDiffr(runtime) {
+  for (const directory of [diffrPackage, platformPackage])
+    await cp(
+      directory,
+      path.join(runtime, "node_modules/@dev.fast", path.basename(directory)),
+      { recursive: true, dereference: true },
+    );
+}
 
 async function collect(repositoryPath, base, head, paths, kind = "trees") {
   return Array.fromAsync(
@@ -100,7 +119,7 @@ describe("Relocated runtime diffr integrates with Review streams and settings", 
     git("add", "-A");
     git("commit", "-qm", "head");
     head = git("rev-parse", "HEAD");
-    await stageDiffrBinary(runtime, source);
+    await stageDiffr(runtime);
     await build({
       config: false,
       entry: {
@@ -318,7 +337,7 @@ describe("Relocated runtime diffr integrates with Review streams and settings", 
 
   test("an unbundled installation falls back to PATH", async () => {
     delete process.env.REVIEW_DIFFR_BINARY;
-    await rm(path.join(runtime, "bin"), { recursive: true, force: true });
+    await rm(path.join(runtime, "node_modules"), { recursive: true, force: true });
     await assert.rejects(
       collect(repository, base, head),
       /diffr exited with 97/,
@@ -329,7 +348,7 @@ describe("Relocated runtime diffr integrates with Review streams and settings", 
   describe("a working host installation coexists with the Desktop bundle", () => {
     let called, launcher;
     beforeAll(async () => {
-      await stageDiffrBinary(runtime, source);
+      await stageDiffr(runtime);
       const host = path.join(root, "host");
       const traced = path.join(root, "traced-host");
       called = path.join(root, "host-called");
@@ -370,7 +389,7 @@ process.exit(result.status ?? 1);
 
     test("without a bundle the host binary runs real diffs and settings", async () => {
       delete process.env.REVIEW_DIFFR_BINARY;
-      await rm(path.join(runtime, "bin"), { recursive: true, force: true });
+      await rm(path.join(runtime, "node_modules"), { recursive: true, force: true });
       successfulFiles(await collect(repository, base, head), 3);
       assert.equal(existsSync(called), true);
       await rm(called);

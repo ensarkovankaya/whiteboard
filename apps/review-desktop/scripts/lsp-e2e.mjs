@@ -38,9 +38,11 @@ const { values } = parseArgs({
   options: { app: { type: "string" }, keep: { type: "boolean" } },
 });
 
+const diffrPackage = `node_modules/@dev.fast/diffr-${process.platform}-${process.arch}/diffr`;
+
 const bundledDiffr = values.app
-  ? path.join(values.app, "Contents/Resources/app/review-runtime/bin/diffr")
-  : path.join(workspace, "packages/review/bin/diffr");
+  ? path.join(values.app, "Contents/Resources/app/review-runtime", diffrPackage)
+  : path.join(workspace, diffrPackage);
 
 const structuralDiffAvailable =
   !!process.env.REVIEW_DIFFR_BINARY ||

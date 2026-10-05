@@ -42,7 +42,6 @@
   },
   "scripts": {
     "prebuild": "pnpm run build:workspace-deps",
-    "ensure:diffr": "diffr-fetch --into bin",
     "build": "node --max-old-space-size=8192 node_modules/tsdown/dist/run.mjs",
     "build:tutorial-assets": "tsx scripts/build-tutorial-assets.ts",
     "ensure:tutorial-assets": "tsx scripts/ensure-tutorial-assets.ts",
@@ -58,7 +57,7 @@
     "test:node": "vitest run --config vitest.config.ts --project shared-module-graph",
     "test:telemetry-privacy": "vitest run --config vitest.config.ts src/ui-telemetry-events.test.ts src/error-telemetry.test.ts",
     "typecheck": "pnpm -w exec tsc --noEmit -p packages/review",
-    "test:integration:diffr": "pnpm run build:workspace-deps && pnpm run ensure:diffr --required && vitest run --config vitest.integration.config.ts",
+    "test:integration:diffr": "pnpm run build:workspace-deps && vitest run --config vitest.integration.config.ts",
     "whiteboard": "tsx src/cli.ts"
   },
   "dependencies": {

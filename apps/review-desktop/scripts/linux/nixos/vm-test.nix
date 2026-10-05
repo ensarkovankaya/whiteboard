@@ -15,7 +15,7 @@ let
     targetPkgs = p: package.runtimePackages p ++ [ p.unzip p.file p.binutils p.cargo p.rustc ];
     runScript = pkgs.writeShellScript "probe-installed-whiteboard" ''
       set -eu
-      ${raw}/resources/app/review-runtime/bin/diffr --version
+      ${raw}/resources/app/review-runtime/node_modules/@dev.fast/diffr-linux-*/diffr --version
       mkdir -p "$HOME/rust-extension"
       unzip -qo ${rustVsix} -d "$HOME/rust-extension"
       chmod +x "$HOME/rust-extension/extension/server/rust-analyzer"
