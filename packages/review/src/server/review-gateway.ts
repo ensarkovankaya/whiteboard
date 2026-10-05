@@ -12,6 +12,7 @@ import {
   isJsonObject,
   parseJsonText,
 } from "@dev.fast/review-protocol";
+import { Hono } from "hono";
 import { z } from "zod";
 
 import { StreamLimitError, readBoundedStream } from "./bounded-stream.js";
@@ -51,42 +52,53 @@ const LAPTOP_ROUTES = new Set([
   "commands",
 ]);
 
-const FORWARDED_ROUTES: readonly (readonly [string, RegExp])[] = [
-  ["GET", /^$/],
-  ["GET", /^progress$/],
-  ["POST", /^progress$/],
-  ["GET", /^commits$/],
-  ["GET", /^diff$/],
-  ["GET", /^structural-diff$/],
-  ["GET", /^stack$/],
-  ["GET", /^tree$/],
-  ["GET", /^file$/],
-  ["GET", /^resources\/[^/]+$/],
-  ["GET", /^maps\/[^/]+$/],
-  ["POST", /^navigator$/],
-  ["POST", /^copy-context$/],
-  ["GET", /^language-context$/],
-  ["GET", /^ask\/agents$/],
-  ["GET", /^ask\/agents\/[^/]+\/offer$/],
-  ["GET", /^ask\/mentions$/],
-  ["GET", /^ask\/threads$/],
-  ["GET", /^ask\/[^/]+\/watch$/],
-  ["POST", /^ask$/],
-  [
-    "POST",
-    /^ask\/[^/]+\/(open|prompt|permission|permissions|files|choice|retry|cancel|close)$/,
-  ],
-  ["DELETE", /^ask\/[^/]+$/],
+interface RemoteRoute {
+  method: string;
+  path: string;
+  /** May wait on preparing a checkout or launching an agent. */
+  slow?: true;
+  wholeBody?: true;
+}
+
+const REMOTE_ROUTES: readonly RemoteRoute[] = [
+  { method: "GET", path: "" },
+  { method: "GET", path: "progress" },
+  { method: "POST", path: "progress" },
+  { method: "GET", path: "commits" },
+  { method: "GET", path: "diff" },
+  { method: "GET", path: "structural-diff" },
+  { method: "GET", path: "stack" },
+  { method: "GET", path: "tree" },
+  { method: "GET", path: "file", wholeBody: true },
+  { method: "GET", path: "resources/:name" },
+  { method: "GET", path: "maps/:name" },
+  { method: "POST", path: "navigator", wholeBody: true },
+  { method: "POST", path: "copy-context" },
+  { method: "GET", path: "language-context", slow: true, wholeBody: true },
+  { method: "GET", path: "ask/agents", wholeBody: true },
+  {
+    method: "GET",
+    path: "ask/agents/:agent/offer",
+    slow: true,
+    wholeBody: true,
+  },
+  { method: "GET", path: "ask/mentions", slow: true, wholeBody: true },
+  { method: "GET", path: "ask/threads", wholeBody: true },
+  { method: "GET", path: "ask/:thread/watch" },
+  { method: "POST", path: "ask", slow: true },
+  {
+    method: "POST",
+    path: "ask/:thread/:action{open|choice|permissions}",
+    slow: true,
+  },
+  {
+    method: "POST",
+    path: "ask/:thread/:action{prompt|permission|files|retry|cancel|close}",
+  },
+  { method: "DELETE", path: "ask/:thread" },
 ];
 
 const SLOW_ROUTE_TIMEOUT_MS = 120_000;
-
-/** Routes that may wait on preparing a checkout or launching an agent. */
-const SLOW_ROUTES =
-  /^(language-context|ask|ask\/agents\/[^/]+\/offer|ask\/[^/]+\/(open|choice|permissions)|ask\/mentions)$/;
-
-const WHOLE_BODY_ROUTES =
-  /^(file|language-context|navigator|ask\/agents(\/[^/]+\/offer)?|ask\/mentions|ask\/threads)$/;
 
 const PATH_FIELDS = new Set([
   "localPath",
@@ -350,9 +362,11 @@ export function createReviewGateway(input: {
   async function forward(
     remote: GatewayRemote,
     request: Request,
-    options: { reviewId: string; route?: string; body?: Buffer },
+    options: { reviewId: string; route?: RemoteRoute; body?: Buffer },
   ): Promise<Response> {
     const url = new URL(request.url);
+    const { route } = options;
+    const routePath = url.pathname.split("/").slice(3).join("/");
 
     // The laptop's token never leaves the laptop, in a header or the query.
     if (url.searchParams.has("token")) url.searchParams.delete("token");
@@ -368,9 +382,8 @@ export function createReviewGateway(input: {
     request.signal.addEventListener("abort", leave, { once: true });
 
     let timedOut = false;
-    const waits = SLOW_ROUTES.test(options.route ?? "");
 
-    const limit = waits
+    const limit = route?.slow
       ? (input.slowRouteMs ?? SLOW_ROUTE_TIMEOUT_MS)
       : FIRST_BYTE_TIMEOUT_MS;
 
@@ -397,11 +410,11 @@ export function createReviewGateway(input: {
 
       const reason = !timedOut
         ? errorText(error)
-        : waits
+        : route?.slow
           ? `it did not answer within ${limit / 1_000} seconds`
           : NO_ANSWER;
 
-      if (!waits && !request.signal.aborted) hosts.failed(remote, reason);
+      if (!route?.slow && !request.signal.aborted) hosts.failed(remote, reason);
 
       return answer(remote.alias, timedOut ? 504 : 502, {
         ok: false,
@@ -444,11 +457,11 @@ export function createReviewGateway(input: {
     out.set(REVIEW_HOST_HEADER, remote.alias);
 
     const snapshot =
-      options.route === "" &&
+      route?.path === "" &&
       status === 200 &&
       url.searchParams.get("full") === "true";
 
-    if (snapshot || (options.route && WHOLE_BODY_ROUTES.test(options.route))) {
+    if (snapshot || route?.wholeBody) {
       let cut: string | undefined;
 
       const cutAfter = (ms: number, reason: string) =>
@@ -498,7 +511,7 @@ export function createReviewGateway(input: {
         });
       }
 
-      if (options.route === "navigator" && status === 200) {
+      if (route?.path === "navigator" && status === 200) {
         const uris = navigatorUris(body, remote.serverId);
 
         if (uris) return answer(remote.alias, 200, uris);
@@ -516,7 +529,7 @@ export function createReviewGateway(input: {
 
       if (field) {
         log(
-          `Refused ${remote.alias}'s /${options.route} answer: it carried ${field}.`,
+          `Refused ${remote.alias}'s /${routePath} answer: it carried ${field}.`,
         );
 
         return answer(remote.alias, 502, {
@@ -526,12 +539,12 @@ export function createReviewGateway(input: {
       }
 
       const unusable =
-        options.route === "language-context" && status === 200
+        route?.path === "language-context" && status === 200
           ? unusableLanguageContext(body, remote.serverId)
           : undefined;
 
       if (unusable) {
-        log(`Refused ${remote.alias}'s /${options.route} answer: ${unusable}.`);
+        log(`Refused ${remote.alias}'s /${routePath} answer: ${unusable}.`);
 
         return answer(remote.alias, 502, {
           ok: false,
@@ -601,30 +614,11 @@ export function createReviewGateway(input: {
     return forward(owner.remote, request, { reviewId, body });
   }
 
-  async function handle(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    const [first = "", ...rest] = url.pathname
-      .slice("/reviews-api/".length)
-      .split("/");
-
-    if (first === "commands" && !rest.length && request.method === "POST")
-      return command(request);
-
-    if (request.method === "GET" && !rest.length) {
-      if (first === "") return streams.list(request);
-
-      if (first === "watch") return streams.watch(request);
-    }
-
-    let reviewId: string;
-
-    try {
-      reviewId = decodeURIComponent(first);
-    } catch {
-      return input.local(request);
-    }
-
+  async function review(
+    request: Request,
+    reviewId: string,
+    route?: RemoteRoute | "telemetry",
+  ): Promise<Response> {
     if (!reviewId || LAPTOP_ROUTES.has(reviewId)) return input.local(request);
     const owner = await ownerOf(reviewId);
 
@@ -636,20 +630,15 @@ export function createReviewGateway(input: {
       return response;
     }
 
-    const route = rest.join("/");
     const alias = "remote" in owner ? owner.remote.alias : owner.down.alias;
 
-    if (route.startsWith("telemetry/")) {
+    if (route === "telemetry") {
       await request.body?.cancel();
 
       return answer(alias, 200, { ok: true });
     }
 
-    if (
-      !FORWARDED_ROUTES.some(
-        ([method, pattern]) => method === request.method && pattern.test(route),
-      )
-    )
+    if (!route)
       return answer(alias, 404, {
         ok: false,
         error: "This route is not available for a review on another machine.",
@@ -659,6 +648,27 @@ export function createReviewGateway(input: {
 
     return forward(owner.remote, request, { reviewId, route });
   }
+
+  const app = new Hono({ strict: false }).basePath("/reviews-api");
+
+  app.post("/commands", (context) => command(context.req.raw));
+  app.get("/", (context) => streams.list(context.req.raw));
+  app.get("/watch", (context) => streams.watch(context.req.raw));
+  app.all("/:id/telemetry/*", (context) =>
+    review(context.req.raw, context.req.param("id"), "telemetry"),
+  );
+
+  for (const route of REMOTE_ROUTES)
+    app.on(route.method, `/:id${route.path && `/${route.path}`}`, (context) =>
+      review(context.req.raw, context.req.param("id") ?? "", route),
+    );
+
+  for (const path of ["/:id", "/:id/*"])
+    app.all(path, (context) =>
+      review(context.req.raw, context.req.param("id") ?? ""),
+    );
+
+  app.all("*", (context) => input.local(context.req.raw));
 
   const streams = createGatewayStreams({
     hosts,
@@ -701,7 +711,7 @@ export function createReviewGateway(input: {
   });
 
   return {
-    fetch: handle,
+    fetch: (request: Request) => app.fetch(request),
     setHosts: (list: ReviewGatewayHost[]) => hosts.set(list),
     hosts: () => hosts.states(),
     async close() {
