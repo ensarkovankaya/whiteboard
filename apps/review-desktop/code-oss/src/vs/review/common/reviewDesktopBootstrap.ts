@@ -27,6 +27,8 @@ export interface ReviewDesktopConnection {
   readonly cliVersion?: string;
   /** Minted once per launch by the main process, never announced by the server. */
   readonly appSessionId: string;
+  /** "viewer" when this Desktop reads another machine's server; absent means full. */
+  readonly access?: "full" | "viewer";
 }
 
 /** What the server's ready event announces, before main adds its own fields. */
