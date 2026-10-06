@@ -75,10 +75,20 @@ export async function* structuralDiff(
   // diffr reads the user's config and keys exactly as it would from a shell.
   console.info(`[Review] structural diff: ${executable} ${args.join(" ")}`);
 
-  const settings =
-    input.summaries === false
-      ? await summaryFreeDiffrEnvironment(executable, input.repositoryPath)
-      : undefined;
+  let settings:
+    | Awaited<ReturnType<typeof summaryFreeDiffrEnvironment>>
+    | undefined;
+
+  try {
+    settings =
+      input.summaries === false
+        ? await summaryFreeDiffrEnvironment(executable, input.repositoryPath)
+        : undefined;
+  } catch (error) {
+    // Nothing runs, so nothing is left to time out.
+    clearTimeout(idle);
+    throw error;
+  }
 
   const child = spawn(executable, args, {
     cwd: input.repositoryPath,

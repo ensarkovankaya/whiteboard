@@ -357,3 +357,15 @@ test("keeps the ten most recently read idle comparisons", async () => {
     cache.close();
   }
 });
+
+test("a viewer's diff whose private settings cannot be written leaves no idle timer", async () => {
+  const root = await executable(`process.stdout.write("version = 1\\n");`);
+  // The private settings directory goes under a temp root that is missing.
+  vi.stubEnv("TMPDIR", path.join(root, "missing"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+  await expect(collect(request(root, { summaries: false }))).rejects.toThrow(
+    /ENOENT/,
+  );
+  expect(vi.getTimerCount()).toBe(0);
+});
