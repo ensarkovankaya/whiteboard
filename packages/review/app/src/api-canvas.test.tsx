@@ -414,6 +414,45 @@ it("dismisses immediately through the API without changing the saved document", 
   expect(store.read(reviewId).version).toBe(0);
 });
 
+it("offers no dismissal, source tree, or edits on a read-only review", async () => {
+  const { reviewId } = await command({
+    type: "create",
+    title: "Read only",
+    target: { kind: "commits", ...pins },
+  });
+
+  const app = new Hono().route("/reviews-api", createReviewApi(store));
+  app.get("/reviews-api/:id/commits", (context) => context.json([]));
+
+  const bridge = testReviewBridge(
+    {},
+    { request: async (url, init) => app.request(url, init) },
+  );
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => {
+    canvas = mount(container, {
+      kind: "api",
+      reviewId,
+      bridge,
+      readOnly: true,
+    });
+  });
+  await act(async () => {
+    await vi.waitFor(() =>
+      expect(container.querySelector("h1")?.textContent).toBe("Read only"),
+    );
+  });
+
+  const labels = [...container.querySelectorAll("button")].map(
+    (button) => button.getAttribute("aria-label") ?? button.textContent,
+  );
+
+  expect(labels).not.toContain("Dismiss");
+  expect(labels).not.toContain("Source tree ↗");
+});
+
 it.each([false, true])(
   "adds a retained trace (inline=%s) live and opens its full conversation",
   async (inline) => {

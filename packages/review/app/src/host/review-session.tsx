@@ -20,6 +20,8 @@ import type { ReviewSessionData } from "./review-session-data";
 export interface ReviewSession {
   review?: ReviewSessionData;
   appSessionId: string;
+  /** A viewer's session: the review belongs to another machine's server. */
+  readOnly?: boolean;
   bridge: ReviewCanvasBridge;
   config: ReviewRuntimeConfig;
   surface: ReviewSurface;
