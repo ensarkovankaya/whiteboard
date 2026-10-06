@@ -20,6 +20,7 @@ import type { LocalReviewData } from "@review/review-api/local-data.js";
 import type { ReviewStore } from "@review/review-api/store.js";
 import { mountSharingPublisher } from "@review/sharing/host.js";
 import type { SharedReviewStore } from "@review/sharing/import.js";
+import { REVIEW_APP_SESSION_ID_HEADER } from "@review/ui-telemetry-events";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -28,6 +29,7 @@ import { z } from "zod";
 import type { ReviewDesktopVerbRelay } from "./global-verb-relay";
 import {
   type ReviewHonoEnv,
+  type ReviewRequestAccess,
   applyCorsHeaders,
   corsPreflightResponse,
   jsonResponse,
@@ -110,7 +112,13 @@ export function createReviewServerApp(input: {
 
     await next();
   });
-  app.get("/control", (context) => openControlEvents(context, input.relay));
+  app.get("/control", (context) =>
+    openControlEvents(
+      context,
+      input.relay,
+      requestAccess(context.req.raw, input.token, input.viewerToken) ?? "full",
+    ),
+  );
   app.post("/control/result", async (context) => {
     const accepted = input.relay.acceptResult(
       await readBoundedRequestJson(context.req.raw),
@@ -230,7 +238,9 @@ export function relayReviewCallbacks(
 function openControlEvents(
   context: Context<ReviewHonoEnv>,
   relay: ReviewDesktopVerbRelay,
+  access: ReviewRequestAccess,
 ): Response {
+  const sessionId = context.req.header(REVIEW_APP_SESSION_ID_HEADER);
   let attached = false;
 
   const response = streamSSE(context, async (output) => {
@@ -263,7 +273,10 @@ function openControlEvents(
       abort.abort();
       finish();
     });
-    attached = relay.attach(writer);
+    attached =
+      access === "viewer"
+        ? sessionId !== undefined && relay.attachViewer(writer, sessionId)
+        : relay.attach(writer);
 
     if (!attached) {
       finish();

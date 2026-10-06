@@ -355,6 +355,68 @@ describe("a desktop server with a viewer token", () => {
     expect(health).toHaveProperty("serverId");
     expect(health).not.toHaveProperty("access");
   });
+
+  it("attaches a viewer's /control beside the Desktop's, one per app session", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const abort = new AbortController();
+    const viewer = {
+      "x-review-token": viewerToken,
+      "x-review-app-session-id": "client2-session",
+    };
+
+    try {
+      const primary = await fetch(`${server.url}/control`, {
+        headers: { "x-review-token": server.token },
+        signal: abort.signal,
+      });
+      const first = await fetch(`${server.url}/control`, {
+        headers: viewer,
+        signal: abort.signal,
+      });
+
+      expect(primary.status).toBe(200);
+      expect(first.status).toBe(200);
+      expect(
+        (await fetch(`${server.url}/control`, { headers: viewer })).status,
+      ).toBe(409);
+      // Without an app session a viewer cannot be told apart, so it is refused.
+      expect(
+        (
+          await fetch(`${server.url}/control`, {
+            headers: { "x-review-token": viewerToken },
+          })
+        ).status,
+      ).toBe(409);
+
+      // A viewer alone does not make a Desktop available to agents.
+      const health = await (await fetch(`${server.url}/health`)).json();
+
+      expect(health.desktopAttached).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it("does not count a viewer as an attached Desktop", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const abort = new AbortController();
+
+    try {
+      await fetch(`${server.url}/control`, {
+        headers: {
+          "x-review-token": viewerToken,
+          "x-review-app-session-id": "client2-session",
+        },
+        signal: abort.signal,
+      });
+
+      expect(
+        (await (await fetch(`${server.url}/health`)).json()).desktopAttached,
+      ).toBe(false);
+    } finally {
+      abort.abort();
+    }
+  });
 });
 
 // The servers as they run: the Desktop's host process and `server start`.

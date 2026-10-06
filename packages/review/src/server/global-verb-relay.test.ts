@@ -372,6 +372,113 @@ describe("global Review Desktop verb relay", () => {
       vi.useRealTimers();
     }
   });
+
+  it("mirrors a verb that shows a review to viewers, without waiting for them", async () => {
+    const relay = new GlobalReviewDesktopVerbRelay({ maxClients: 1 });
+    const primary = createWriter();
+    const viewer = createWriter();
+
+    expect(relay.attach(primary.writer)).toBe(true);
+    expect(relay.attachViewer(viewer.writer, "client2")).toBe(true);
+
+    const result = relay.dispatch(openVerb);
+
+    await vi.waitFor(() => expect(viewer.frames).toHaveLength(1));
+    expect(JSON.parse(viewer.frames[0].slice(6))).toMatchObject({
+      event: "desktop-verb",
+      request: openVerb,
+    });
+
+    // Only the primary's answer settles the verb.
+    expect(
+      relay.acceptResult({ id: frameId(viewer), response: { ok: true } }),
+    ).toBe(false);
+    relay.acceptResult({
+      id: frameId(primary),
+      response: { ok: true, result: { softwareMapEnabled: false } },
+    });
+    await expect(result).resolves.toEqual({
+      ok: true,
+      result: { softwareMapEnabled: false },
+    });
+  });
+
+  it("never sends a viewer a verb that is not about showing a review", async () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const primary = createWriter();
+    const viewer = createWriter();
+
+    relay.attach(primary.writer);
+    relay.attachViewer(viewer.writer, "client2");
+
+    void relay.dispatch({ name: "captureScreenshot", args: {} });
+    void relay.dispatch({ name: "focusWindow", args: {} });
+
+    await vi.waitFor(() => expect(primary.frames).toHaveLength(2));
+    expect(viewer.frames).toHaveLength(0);
+  });
+
+  it("is not attached with only viewers, and mirrors nothing then", async () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const viewer = createWriter();
+
+    relay.attachViewer(viewer.writer, "client2");
+
+    expect(relay.attached).toBe(false);
+    await expect(relay.dispatch(openVerb)).resolves.toEqual({
+      ok: false,
+      error: "No Whiteboard Desktop is attached.",
+    });
+    expect(viewer.frames).toHaveLength(0);
+  });
+
+  it("keeps one viewer per app session, eight in all", () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const first = createWriter();
+
+    expect(relay.attachViewer(first.writer, "session-0")).toBe(true);
+    expect(relay.attachViewer(createWriter().writer, "session-0")).toBe(false);
+
+    for (let index = 1; index < 8; index++)
+      expect(
+        relay.attachViewer(createWriter().writer, `session-${index}`),
+      ).toBe(true);
+    expect(relay.attachViewer(createWriter().writer, "session-8")).toBe(false);
+
+    first.abort.abort();
+    expect(relay.attachViewer(createWriter().writer, "session-0")).toBe(true);
+  });
+
+  it("drops a viewer whose stream fails, and the primary still answers", async () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const primary = createWriter();
+    const broken = createWriter();
+
+    broken.writer.write = () => {
+      throw new Error("stream closed");
+    };
+    relay.attach(primary.writer);
+    relay.attachViewer(broken.writer, "client2");
+
+    const result = relay.dispatch(openVerb);
+
+    await vi.waitFor(() => expect(primary.frames).toHaveLength(1));
+    relay.acceptResult({ id: frameId(primary), response: { ok: true } });
+    await expect(result).resolves.toEqual({ ok: true });
+
+    // The failed viewer's slot is free again.
+    expect(relay.attachViewer(createWriter().writer, "client2")).toBe(true);
+  });
+
+  it("closes viewers with the relay", () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const viewer = createWriter();
+
+    relay.attachViewer(viewer.writer, "client2");
+    relay.close();
+
+    expect(viewer.close).toHaveBeenCalled();
+  });
 });
 
 function attachAll(relay: GlobalReviewDesktopVerbRelay, count: number) {
