@@ -25,7 +25,7 @@ class TestStorage {
 	}
 }
 
-function serviceWith(storage = new TestStorage()): ReviewDesktopConnectionService {
+function serviceWith(storage = new TestStorage(), access?: "full" | "viewer"): ReviewDesktopConnectionService {
 	const service = new ReviewDesktopConnectionService({} as never, storage as never);
 	Object.assign(service, {
 		connection: {
@@ -33,6 +33,8 @@ function serviceWith(storage = new TestStorage()): ReviewDesktopConnectionServic
 			url: "http://127.0.0.1:5000",
 			token: "token",
 			instanceId: "instance",
+			appSessionId: "session",
+			...(access ? { access } : {}),
 		},
 		initializePromise: Promise.resolve(),
 	});
@@ -143,4 +145,59 @@ test("tutorial deletion suppresses auto-prepare across restarts until explicit o
 	assert.equal(requests.length, 3);
 	assert.match(requests[2] ?? "", /POST .*\/tutorial\/prepare$/);
 	restoredService.dispose();
+});
+
+test("a connection without access is a full one", async (t) => {
+	const service = serviceWith();
+	t.after(() => service.dispose());
+
+	assert.equal((await service.getConnection()).access, "full");
+});
+
+test("a viewer opens what the server sends, names its app session, and answers nothing", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	t.after(() => service.dispose());
+	const requests: { url: string; method: string; session: string | null }[] = [];
+	const frame = `data: ${JSON.stringify({ event: "desktop-verb", id: uuid, request: { name: "openApiReview", args: { reviewId: uuid, title: "Review" } } })}\n\n`;
+	mockFetch(t, async (input, init) => {
+		requests.push({
+			url: String(input),
+			method: init?.method ?? "GET",
+			session: new Headers(init?.headers).get("x-review-app-session-id"),
+		});
+		if (String(input).includes("/control?")) {
+			return new Response(new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(frame));
+					controller.close();
+				},
+			}), { headers: { "content-type": "text/event-stream" } });
+		}
+		return Response.json({ ok: true });
+	});
+	const dispatched: unknown[] = [];
+
+	await (service as unknown as {
+		consumeControl(dispatch: (value: unknown) => Promise<{ ok: true }>, onConnected: () => void): Promise<void>;
+	}).consumeControl(async (value) => {
+		dispatched.push(value);
+		return { ok: true };
+	}, () => { });
+
+	assert.equal(dispatched.length, 1);
+	assert.deepEqual(requests.map(({ method, session }) => ({ method, session })), [{ method: "GET", session: "session" }]);
+});
+
+test("a viewer prepares no tutorial on the server it reads", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	t.after(() => service.dispose());
+	let requests = 0;
+	mockFetch(t, async () => {
+		requests += 1;
+		return Response.json({ ok: true });
+	});
+
+	await service.prepareTutorial();
+
+	assert.equal(requests, 0);
 });
