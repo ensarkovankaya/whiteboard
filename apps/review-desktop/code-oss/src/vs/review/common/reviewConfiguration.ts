@@ -106,7 +106,7 @@ configurationRegistry.registerConfiguration({
 			maximum: 65535,
 			default: 0,
 			ignoreSync: true,
-			description: localize('review.server.port', "The server's port. Embedded: 0 lets the system choose; set a port so other machines can reach it. External: the port to connect to. WHITEBOARD_SERVER_PORT overrides it. Takes effect after restarting Whiteboard."),
+			description: localize('review.server.port', "The server's port. Embedded: 0 lets the system choose; set a port so other machines can reach it. External: the port to connect to. WHITEBOARD_SERVER_PORT overrides it, for every embedded Whiteboard (stable, preview, dev) started from that shell environment, so only one of them can bind the port. Takes effect after restarting Whiteboard."),
 		},
 		[REVIEW_SERVER_VIEWER_TOKEN_SETTING]: {
 			type: 'string',

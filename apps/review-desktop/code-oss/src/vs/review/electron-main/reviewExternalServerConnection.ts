@@ -105,7 +105,11 @@ export class ReviewExternalServerConnection extends Disposable {
           ]),
         });
         if (response.ok) {
-          health = await response.json();
+          // A wrong service behind the tunnel answers OK with something else.
+          health = await response.json().catch(() => undefined);
+          if (!isHealth(health) && !this.stopped.signal.aborted) {
+            logFirstFailure("the answer is not a Whiteboard server's health");
+          }
         } else {
           logFirstFailure(`HTTP ${response.status}`);
         }
@@ -113,10 +117,15 @@ export class ReviewExternalServerConnection extends Disposable {
         if (this.stopped.signal.aborted) throw stoppedError();
         logFirstFailure(error instanceof Error ? error.message : String(error));
       }
-      if (isRecord(health) && health.ok === true && typeof health.instanceId === "string") {
+      if (isHealth(health)) {
         if (health.access !== "viewer") {
+          // A server from before viewer support also omits access.
+          const versions =
+            typeof health.version === "string" && health.version !== this.options.appVersion
+              ? ` It runs Whiteboard ${health.version}; this Desktop is ${this.options.appVersion}, and an older server may not support viewers.`
+              : "";
           throw new ReviewExternalServerRejectedError(
-            `The Whiteboard server at ${origin} did not accept the viewer token. Use the same viewer token on both machines.`,
+            `The Whiteboard server at ${origin} did not accept the viewer token. Use the same viewer token on both machines.${versions}`,
           );
         }
         if (typeof health.version === "string" && health.version !== this.options.appVersion) {
@@ -153,6 +162,10 @@ export class ReviewExternalServerConnection extends Disposable {
 
 function stoppedError(): Error {
   return new Error("The Whiteboard server connection was stopped.");
+}
+
+function isHealth(value: unknown): value is Record<string, unknown> & { instanceId: string } {
+  return isRecord(value) && value.ok === true && typeof value.instanceId === "string";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

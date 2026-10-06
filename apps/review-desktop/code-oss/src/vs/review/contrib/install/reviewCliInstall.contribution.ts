@@ -66,6 +66,13 @@ class OpenTutorialAction extends Action2 {
 		const desktopConnection = accessor.get(IReviewDesktopConnectionService);
 		const tabsService = accessor.get(IReviewCanvasEditorTabsService);
 		try {
+			// The tutorial is the server machine's: a viewer cannot open it.
+			if ((await desktopConnection.getConnection()).access === "viewer") {
+				notificationService.info(
+					localize("review.tutorial.viewer", "Open the Whiteboard tutorial on the machine that runs the server."),
+				);
+				return;
+			}
 			const opened = await desktopConnection.openTutorial();
 			await tabsService.openApiReview(opened.reviewUuid, opened.title);
 		} catch (error) {
@@ -92,6 +99,14 @@ class InstallReviewCliInPathAction extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const desktopConnection = accessor.get(IReviewDesktopConnectionService);
 		try {
+			// The server installs the CLI on its own machine, which for a
+			// viewer is another one.
+			if ((await desktopConnection.getConnection()).access === "viewer") {
+				notificationService.info(
+					localize("review.cliInstall.viewer", "Install the Whiteboard CLI on the machine that runs the server."),
+				);
+				return;
+			}
 			if (isMacintosh) {
 				await nativeHostService.uninstallShellCommand({ commandName: "review", symlinkOnly: true });
 			}

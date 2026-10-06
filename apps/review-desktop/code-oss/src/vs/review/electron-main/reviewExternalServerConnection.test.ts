@@ -82,6 +82,45 @@ test('a server that does not take the token as a viewer is an error, not a retry
 	assert.equal(calls, 1);
 });
 
+test('a rejecting server on another version names both versions', async (t) => {
+	const connection = connectionWith(async () => health('instance-1', { version: '0.1.0' }), { appVersion: '0.2.0' });
+	t.after(() => connection.dispose());
+
+	await assert.rejects(connection.whenConnected(), (error: Error) => {
+		assert.match(error.message, /viewer token/i);
+		assert.match(error.message, /0\.1\.0/);
+		assert.match(error.message, /0\.2\.0/);
+		return true;
+	});
+});
+
+test('a rejecting server on the same version blames only the token', async (t) => {
+	const connection = connectionWith(async () => health('instance-1', {}));
+	t.after(() => connection.dispose());
+
+	await assert.rejects(connection.whenConnected(), (error: Error) => {
+		assert.doesNotMatch(error.message, /0\.2\.0/);
+		return true;
+	});
+});
+
+test('an OK answer that is not Whiteboard health is a logged failure', async (t) => {
+	const errors: string[] = [];
+	let calls = 0;
+	const connection = connectionWith(async () => {
+		calls += 1;
+		if (calls === 1) return Response.json({ status: 'up' });
+		if (calls === 2) return new Response('<html>tailnet</html>', { status: 200 });
+		return health('instance-1');
+	}, { errors });
+	t.after(() => connection.dispose());
+
+	assert.equal((await connection.whenConnected()).instanceId, 'instance-1');
+	assert.equal(calls, 3);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /not a Whiteboard server/i);
+});
+
 test('without a viewer token it asks for one before reaching out', async (t) => {
 	let calls = 0;
 	const connection = connectionWith(async () => {

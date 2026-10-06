@@ -505,10 +505,10 @@ export class ReviewCanvasEditorPane extends EditorPane {
 			this.setCanvasState("home");
 			await this.apiCatalog.initialize();
 			let emptyStateVisible = false;
-			/* The empty-list render suspends on the install fetch below, while
-			   the list render has no await at all. The sequence number keeps a
-			   suspended empty render from resuming after a later list render
-			   and overwriting it with a stale snapshot. */
+			/* Every render awaits the connection, and the empty-list render also
+			   the install fetch, so renders can resume out of order. The
+			   sequence number keeps a suspended render from resuming after a
+			   later one and overwriting it with a stale snapshot. */
 			let renderSeq = 0;
 			const renderHome = async () => {
 				const seq = ++renderSeq;
@@ -557,11 +557,12 @@ export class ReviewCanvasEditorPane extends EditorPane {
 								}
 							},
 							setupActions: this.setupActions(),
+							// The server machine owns the tutorial.
+							openTutorial: () => this.openTutorial(),
 						}),
 						// Home shows the Welcome rail while the list is empty.
 						install,
 						onboarding: install ? this.resolveOnboarding(install.status) : undefined,
-						openTutorial: () => this.openTutorial(),
 					},
 					generation,
 				);
@@ -577,26 +578,33 @@ export class ReviewCanvasEditorPane extends EditorPane {
 			return;
 		}
 		if (input.target.kind === "welcome") {
-			void this.desktopConnection
-				.prepareTutorial()
-				.catch((error) => this.logService.warn("[Whiteboard] Tutorial preparation did not complete:", error));
 			this.renderedInput = input;
 			this.setCanvasState("home");
+			// The CLI install, agent setup and tutorial belong to the server
+			// machine, so a viewer's Welcome offers none of them.
+			const viewer = (await this.desktopConnection.getConnection()).access === "viewer";
+			if (!viewer) {
+				void this.desktopConnection
+					.prepareTutorial()
+					.catch((error) => this.logService.warn("[Whiteboard] Tutorial preparation did not complete:", error));
+			}
 			/* Same stale-resume guard as Home: the install fetch suspends, and
 			   a later list event must win over an earlier suspended render. */
 			let renderSeq = 0;
 			const renderWelcome = async () => {
 				const seq = ++renderSeq;
-				const install = await this.resolveInstallContent();
+				const install = viewer ? undefined : await this.resolveInstallContent();
 				if (seq !== renderSeq) return;
 				return this.render(
 					{
 						kind: "welcome",
 						install,
-						setupActions: this.setupActions(),
 						close: () => void this.group.closeEditor(input),
 						onboarding: install ? this.resolveOnboarding(install.status) : undefined,
-						openTutorial: () => this.openTutorial(),
+						...(viewer ? {} : {
+							setupActions: this.setupActions(),
+							openTutorial: () => this.openTutorial(),
+						}),
 					},
 					generation,
 				);
@@ -610,7 +618,11 @@ export class ReviewCanvasEditorPane extends EditorPane {
 		if (input.target.kind === "settings") {
 			this.renderedInput = input;
 			this.setCanvasState("home");
-			const [settings, install] = await Promise.all([this.resolveSettingsContent(), this.resolveInstallContent()]);
+			const viewer = (await this.desktopConnection.getConnection()).access === "viewer";
+			const [settings, install] = await Promise.all([
+				this.resolveSettingsContent(viewer),
+				viewer ? undefined : this.resolveInstallContent(),
+			]);
 			await this.render({ kind: "settings", settings: { ...settings, install } }, generation);
 			return;
 		}
@@ -786,13 +798,35 @@ export class ReviewCanvasEditorPane extends EditorPane {
 
 	/**
 	 * Settings state and actions for the Settings page. Every value lives in
-	 * workbench configuration, apart from the scratchpad, which the review server
-	 * owns. Extensions reuse the existing quick pick.
+	 * workbench configuration, apart from the scratchpad and the diffr
+	 * configuration, which the review server owns; a viewer gets neither, since
+	 * they belong to the server machine. Extensions reuse the existing quick pick.
 	 */
-	private async resolveSettingsContent(): Promise<ReviewCanvasSettingsContent> {
+	private async resolveSettingsContent(viewer: boolean): Promise<ReviewCanvasSettingsContent> {
 		// Settings must render even when the server preference cannot be read;
 		// the row then shows the default, off.
-		const scratchpadEnabled = await this.desktopConnection.readScratchpadEnabled().catch(() => false);
+		const scratchpadEnabled = viewer ? false : await this.desktopConnection.readScratchpadEnabled().catch(() => false);
+		const serverPreferences: Pick<ReviewCanvasSettingsContent, "setScratchpadEnabled" | "diffrConfig"> = viewer ? {} : {
+			setScratchpadEnabled: async (enabled) => {
+				this.reviewTelemetryService.capture("setting_changed", {
+					setting: "scratchpad_enabled",
+					enabled,
+				});
+				return this.desktopConnection.setScratchpadEnabled(enabled);
+			},
+			diffrConfig: {
+				saveSummarizer: (input) => this.desktopConnection.saveDiffrSummarizer(input),
+				testSummarizer: (input) => this.desktopConnection.testDiffrSummarizer(input),
+				read: () => this.desktopConnection.readDiffrConfig(),
+				set: (key, value) => {
+					this.reviewTelemetryService.capture("setting_changed", {
+						setting: "diffr_config",
+						enabled: true,
+					});
+					return this.desktopConnection.setDiffrConfigValue(key, value);
+				},
+			},
+		};
 		return {
 			telemetryEnabled: this.currentTelemetryEnabled(),
 			setTelemetryEnabled: async (enabled) => {
@@ -870,13 +904,6 @@ export class ReviewCanvasEditorPane extends EditorPane {
 				return this.currentSoftwareMapEnabled();
 			},
 			scratchpadEnabled,
-			setScratchpadEnabled: async (enabled) => {
-				this.reviewTelemetryService.capture("setting_changed", {
-					setting: "scratchpad_enabled",
-					enabled,
-				});
-				return this.desktopConnection.setScratchpadEnabled(enabled);
-			},
 			structuralDiffEnabled: this.currentStructuralDiffEnabled(),
 			setStructuralDiffEnabled: async (enabled) => {
 				this.reviewTelemetryService.capture("setting_changed", {
@@ -891,18 +918,7 @@ export class ReviewCanvasEditorPane extends EditorPane {
 				return this.currentStructuralDiffEnabled();
 			},
 			reloadWindow: async () => { await this.commandService.executeCommand("workbench.action.reloadWindow"); },
-			diffrConfig: {
-				saveSummarizer: (input) => this.desktopConnection.saveDiffrSummarizer(input),
-				testSummarizer: (input) => this.desktopConnection.testDiffrSummarizer(input),
-				read: () => this.desktopConnection.readDiffrConfig(),
-				set: (key, value) => {
-					this.reviewTelemetryService.capture("setting_changed", {
-						setting: "diffr_config",
-						enabled: true,
-					});
-					return this.desktopConnection.setDiffrConfigValue(key, value);
-				},
-			},
+			...serverPreferences,
 			manageExtensions: () => void this.commandService.executeCommand("review.manageExtensions"),
 			importVsCodeSettings: () => void this.commandService.executeCommand("review.importUserConfig"),
 		};

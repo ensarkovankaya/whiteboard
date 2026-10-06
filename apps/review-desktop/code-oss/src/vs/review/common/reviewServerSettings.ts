@@ -48,7 +48,10 @@ export function reviewExternalServerOrigin(host: string, port: number): string {
 	if (port === 0) {
 		throw new Error(`Set ${REVIEW_SERVER_PORT_SETTING} (or ${REVIEW_SERVER_PORT_ENV}) to the port the Whiteboard server listens on.`);
 	}
-	if (host === '127.0.0.1' || host === 'localhost') {
+	// Host names are case-insensitive. IPv6 loopback stays out: the CSP allows
+	// only http://127.0.0.1.
+	const loopback = host.toLowerCase();
+	if (loopback === '127.0.0.1' || loopback === 'localhost') {
 		return `http://127.0.0.1:${port}`;
 	}
 	let url: URL;

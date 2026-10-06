@@ -50,6 +50,7 @@ test('a port outside 0-65535 names where it came from', () => {
 test('a loopback host is reached over http, any other over https', () => {
 	assert.equal(reviewExternalServerOrigin('127.0.0.1', 47100), 'http://127.0.0.1:47100');
 	assert.equal(reviewExternalServerOrigin('localhost', 47100), 'http://127.0.0.1:47100');
+	assert.equal(reviewExternalServerOrigin('LOCALHOST', 47100), 'http://127.0.0.1:47100');
 	assert.equal(reviewExternalServerOrigin('client1.example', 443), 'https://client1.example');
 	assert.equal(reviewExternalServerOrigin('client1.example', 8443), 'https://client1.example:8443');
 });
