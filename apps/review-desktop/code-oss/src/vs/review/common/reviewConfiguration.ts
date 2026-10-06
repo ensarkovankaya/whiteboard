@@ -20,7 +20,7 @@
 import { localize } from '../../nls.js';
 import { Registry } from '../../platform/registry/common/platform.js';
 import { ConfigurationScope, Extensions, type IConfigurationRegistry } from '../../platform/configuration/common/configurationRegistry.js';
-import { REVIEW_CTRL_TAB_CHOICES, REVIEW_CTRL_TAB_SETTING, REVIEW_DOCUMENT_WIDTH_CHOICES, REVIEW_DOCUMENT_WIDTH_SETTING, REVIEW_KEYMAPS, REVIEW_KEYMAP_SETTING, REVIEW_READY_NOTIFICATION_CHOICES, REVIEW_READY_NOTIFICATION_SETTING, REVIEW_SOFTWARE_MAP_SETTING, REVIEW_STRUCTURAL_DIFF_SETTING, REVIEW_TELEMETRY_SETTING, curatedExtensionConfigurationDefaults, reviewConfigurationDefaults } from './reviewConfigurationDefaults.js';
+import { REVIEW_CTRL_TAB_CHOICES, REVIEW_CTRL_TAB_SETTING, REVIEW_DOCUMENT_WIDTH_CHOICES, REVIEW_DOCUMENT_WIDTH_SETTING, REVIEW_KEYMAPS, REVIEW_KEYMAP_SETTING, REVIEW_READY_NOTIFICATION_CHOICES, REVIEW_READY_NOTIFICATION_SETTING, REVIEW_SERVER_HOST_SETTING, REVIEW_SERVER_MODES, REVIEW_SERVER_MODE_SETTING, REVIEW_SERVER_PORT_SETTING, REVIEW_SERVER_VIEWER_TOKEN_SETTING, REVIEW_SOFTWARE_MAP_SETTING, REVIEW_STRUCTURAL_DIFF_SETTING, REVIEW_TELEMETRY_SETTING, curatedExtensionConfigurationDefaults, reviewConfigurationDefaults } from './reviewConfigurationDefaults.js';
 
 const configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
 
@@ -82,6 +82,37 @@ configurationRegistry.registerConfiguration({
 			type: 'boolean',
 			default: false,
 			description: localize('review.experimental.softwareMap.enabled', "Show the experimental Software Map view in sessions."),
+		},
+		[REVIEW_SERVER_MODE_SETTING]: {
+			type: 'string',
+			enum: [...REVIEW_SERVER_MODES],
+			enumDescriptions: [
+				localize('review.server.mode.embedded', "Run the Whiteboard server inside this app."),
+				localize('review.server.mode.external', "Connect read-only to another machine's Whiteboard server through review.server.host and review.server.port."),
+			],
+			default: 'embedded',
+			ignoreSync: true,
+			description: localize('review.server.mode', "Where this Whiteboard's server runs. Takes effect after restarting Whiteboard."),
+		},
+		[REVIEW_SERVER_HOST_SETTING]: {
+			type: 'string',
+			default: '127.0.0.1',
+			ignoreSync: true,
+			description: localize('review.server.host', "The external server's host. 127.0.0.1 for an SSH tunnel; any other host is reached over https. Takes effect after restarting Whiteboard."),
+		},
+		[REVIEW_SERVER_PORT_SETTING]: {
+			type: 'integer',
+			minimum: 0,
+			maximum: 65535,
+			default: 0,
+			ignoreSync: true,
+			description: localize('review.server.port', "The server's port. Embedded: 0 lets the system choose; set a port so other machines can reach it. External: the port to connect to. WHITEBOARD_SERVER_PORT overrides it. Takes effect after restarting Whiteboard."),
+		},
+		[REVIEW_SERVER_VIEWER_TOKEN_SETTING]: {
+			type: 'string',
+			default: '',
+			ignoreSync: true,
+			description: localize('review.server.viewerToken', "The read-only token remote viewers present. Embedded: empty turns remote viewing off. External: the token to connect with. WHITEBOARD_VIEWER_TOKEN overrides it. Takes effect after restarting Whiteboard."),
 		},
 	},
 });
