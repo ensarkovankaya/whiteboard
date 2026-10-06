@@ -404,9 +404,11 @@ export class ReviewCanvasEditorPane extends EditorPane {
 				this.renderedInput = input;
 				this.setCanvasState("active", reviewId);
 				this.sessionTelemetry.start(reviewId);
-				void this.apiCatalog
-					.attention(reviewId, "view")
-					.catch((error) => this.logService.warn("[Whiteboard] Could not mark session viewed:", error));
+				if (connection.access !== "viewer") {
+					void this.apiCatalog
+						.attention(reviewId, "view")
+						.catch((error) => this.logService.warn("[Whiteboard] Could not mark session viewed:", error));
+				}
 				let sourceSelection: ReviewSourceSelection = { reviewId, kind: "current" };
 				let sourceView: ReviewSourceView = resolveReviewSourceView({ reviewId, version: 0, pins: {} });
 				const source = this.apiSource.canvas(() => sourceView, this.inlineEditors, this.diffViews);
@@ -438,6 +440,7 @@ export class ReviewCanvasEditorPane extends EditorPane {
 							this.canvas.value?.update(this.apiContent);
 						},
 						kind: "api",
+						readOnly: connection.access === "viewer",
 						reviewId,
 						structuralDiffEnabled: this.currentStructuralDiffEnabled(),
 						softwareMapEnabled: this.currentSoftwareMapEnabled(),
@@ -509,12 +512,13 @@ export class ReviewCanvasEditorPane extends EditorPane {
 			let renderSeq = 0;
 			const renderHome = async () => {
 				const seq = ++renderSeq;
+				const viewer = (await this.desktopConnection.getConnection()).access === "viewer";
 				const reviews = this.apiCatalog.reviews;
 				const isEmpty = reviews.length === 0;
 				// Only the Welcome rail needs install status; the list must
 				// render without waiting on it. One fetch serves both the
 				// install card and the onboarding rail.
-				const install = isEmpty ? await this.resolveInstallContent() : undefined;
+				const install = isEmpty && !viewer ? await this.resolveInstallContent() : undefined;
 				if (seq !== renderSeq) return;
 				if (isEmpty && !emptyStateVisible) {
 					this.reviewTelemetryService.capture("home_empty_state_viewed");
@@ -532,28 +536,30 @@ export class ReviewCanvasEditorPane extends EditorPane {
 						kind: "home",
 						reviews,
 						openReview: (uuid) => void openReview(uuid),
-						deleteReview: (uuid) => {
-							this.reviewTelemetryService.capture("review_deleted", { via: "home" });
-							return this.apiCatalog.deleteReview(uuid);
-						},
-						dismissReview: (uuid) => {
-							this.reviewTelemetryService.capture("review_dismissed", { via: "home" });
-							return this.apiCatalog.attention(uuid, "dismiss");
-						},
-						restoreReview: (uuid) => {
-							this.reviewTelemetryService.capture("review_restored", { via: "home" });
-							return this.apiCatalog.attention(uuid, "restore");
-						},
-						openSourceTree: (uuid) => {
-							const api = this.apiCatalog.reviews.find((review) => review.reviewId === uuid);
-							if (api) {
-								void this.tabsService.openApiSource({ reviewId: api.reviewId, kind: "current" }, api.title).catch(error => this.notificationService.error(error));
-								return;
-							}
-						},
+						...(viewer ? {} : {
+							deleteReview: (uuid: string) => {
+								this.reviewTelemetryService.capture("review_deleted", { via: "home" });
+								return this.apiCatalog.deleteReview(uuid);
+							},
+							dismissReview: (uuid: string) => {
+								this.reviewTelemetryService.capture("review_dismissed", { via: "home" });
+								return this.apiCatalog.attention(uuid, "dismiss");
+							},
+							restoreReview: (uuid: string) => {
+								this.reviewTelemetryService.capture("review_restored", { via: "home" });
+								return this.apiCatalog.attention(uuid, "restore");
+							},
+							openSourceTree: (uuid: string) => {
+								const api = this.apiCatalog.reviews.find((review) => review.reviewId === uuid);
+								if (api) {
+									void this.tabsService.openApiSource({ reviewId: api.reviewId, kind: "current" }, api.title).catch(error => this.notificationService.error(error));
+									return;
+								}
+							},
+							setupActions: this.setupActions(),
+						}),
 						// Home shows the Welcome rail while the list is empty.
 						install,
-						setupActions: this.setupActions(),
 						onboarding: install ? this.resolveOnboarding(install.status) : undefined,
 						openTutorial: () => this.openTutorial(),
 					},

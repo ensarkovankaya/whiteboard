@@ -285,6 +285,8 @@ class ReviewCliInstallStartup implements IWorkbenchContribution {
 	}
 
 	private async check(): Promise<void> {
+		// The CLI belongs to the machine that runs the server.
+		if ((await this.reviewDesktopConnectionService.getConnection()).access === "viewer") return;
 		const status = await this.reviewDesktopConnectionService.getCliInstallStatus();
 		switch (reviewCliInstallStartupAction(status)) {
 			case "openWelcome":

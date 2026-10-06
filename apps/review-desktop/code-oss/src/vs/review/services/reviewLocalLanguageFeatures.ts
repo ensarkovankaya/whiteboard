@@ -114,6 +114,8 @@ export class ReviewLocalLanguageFeatures extends Disposable {
 
 	private async localSource(model: ITextModel, warming = false): Promise<LocalSource | undefined> {
 		if (this._store.isDisposed || model.isDisposed() || new URLSearchParams(model.uri.query).has("empty")) return undefined;
+		// The server's checkout is on another machine; nothing local can answer.
+		if ((await this.connection.getConnection()).access === "viewer") return undefined;
 		try {
 			const epoch = this.environments.generation;
 			const context = await this.environment(model);

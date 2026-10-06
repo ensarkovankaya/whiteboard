@@ -70,7 +70,7 @@ function setup(input: ReturnType<typeof model> | ReturnType<typeof model>[]) {
 		equalsTextBuffer: (other: string) => other === "same pinned source",
 	};
 	const service = new ReviewLocalLanguageFeatures(
-		{ onDidChangeConnection: () => Disposable.None } as any,
+		{ onDidChangeConnection: () => Disposable.None, getConnection: async () => ({ access: "full" }) } as any,
 		{ createModelReference: async (uri: URI) => ({ object: { textEditorModel: { ...local, uri } }, dispose() { } }) } as any,
 		modelService as any,
 		languages,

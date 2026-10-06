@@ -702,6 +702,9 @@ export type ReviewCanvasContent =
       documentWidth?: ReviewDocumentWidthChoice;
       reviewId: string;
       version?: number;
+      // Another machine's review, read through a viewer connection: no edits,
+      // no Ask, no sharing, no dismissal, no local source.
+      readOnly?: boolean;
       bridge: ReviewCanvasBridge;
       setTitle?(title: string): void;
       setSourceView?(
