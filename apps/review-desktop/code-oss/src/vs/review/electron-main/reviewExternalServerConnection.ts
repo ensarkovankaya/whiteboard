@@ -7,6 +7,7 @@ import { Disposable } from "../../base/common/lifecycle.js";
 import { REVIEW_SERVER_VIEWER_TOKEN_SETTING } from "../common/reviewConfigurationDefaults.js";
 import {
   REVIEW_DESKTOP_CONNECTION_VERSION,
+  REVIEW_EXTERNAL_SERVER_REJECTED,
   type ReviewDesktopConnection,
 } from "../common/reviewDesktopBootstrap.js";
 import { REVIEW_VIEWER_TOKEN_ENV, REVIEW_VIEWER_TOKEN_MIN_LENGTH } from "../common/reviewServerSettings.js";
@@ -17,7 +18,7 @@ const EXTERNAL_RETRY_DELAYS = [250, 1_000, 2_000, 4_000];
 
 /** The server answered, but will not take this Desktop as a viewer. Retrying cannot help. */
 export class ReviewExternalServerRejectedError extends Error {
-  override readonly name = "ReviewExternalServerRejectedError";
+  override readonly name = REVIEW_EXTERNAL_SERVER_REJECTED;
 }
 
 export interface ReviewExternalServerOptions {

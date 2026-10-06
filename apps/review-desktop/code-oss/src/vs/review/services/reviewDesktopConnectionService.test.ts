@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { REVIEW_EXTERNAL_SERVER_REJECTED } from "../common/reviewDesktopBootstrap.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
 
 const uuid = "11111111-1111-4111-8111-111111111111";
@@ -227,4 +228,35 @@ test("a window names its control stream the same way on every reconnect", async 
 	assert.equal(typeof controlIds[0], "string");
 	assert.equal(controlIds[1], controlIds[0]);
 	assert.notEqual(controlIds[2], controlIds[0]);
+});
+
+test("a refused viewer stops its control channel, while a passing failure retries", async (t) => {
+	t.mock.method(console, "error", () => { });
+	const asks = { refused: 0, passing: 0 };
+	// Main's refusal as it arrives over IPC: an Error carrying the class's name.
+	const refusal = Object.assign(new Error("The Whiteboard server did not accept the viewer token."), {
+		name: REVIEW_EXTERNAL_SERVER_REJECTED,
+	});
+	const failing = (kind: keyof typeof asks, error: Error) => new ReviewDesktopConnectionService({
+		getChannel: () => ({
+			call: async () => {
+				asks[kind] += 1;
+				throw error;
+			},
+		}),
+	} as never, new TestStorage() as never);
+	const refused = failing("refused", refusal);
+	const passing = failing("passing", new Error("main is still starting"));
+	t.after(() => {
+		refused.dispose();
+		passing.dispose();
+	});
+
+	refused.attachControl(async () => ({ ok: true }));
+	passing.attachControl(async () => ({ ok: true }));
+	// Past the first retry delay (250 ms).
+	await new Promise((resolve) => setTimeout(resolve, 600));
+
+	assert.equal(asks.refused, 1);
+	assert.ok(asks.passing >= 2, `asked ${asks.passing} times`);
 });

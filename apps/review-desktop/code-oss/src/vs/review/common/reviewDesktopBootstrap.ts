@@ -17,6 +17,13 @@ export const REVIEW_DESKTOP_CONNECTION_VERSION = 3;
 /** Main-process IPC channel the renderer asks for that endpoint on. */
 export const REVIEW_DESKTOP_CHANNEL = "review";
 
+/**
+ * The name of the error main answers `getConnection` with when another
+ * machine's server will not take this Desktop as a viewer. IPC keeps an
+ * error's name, not its class; retrying cannot help.
+ */
+export const REVIEW_EXTERNAL_SERVER_REJECTED = "ReviewExternalServerRejectedError";
+
 export interface ReviewDesktopConnection {
   readonly version: number;
   readonly url: string;

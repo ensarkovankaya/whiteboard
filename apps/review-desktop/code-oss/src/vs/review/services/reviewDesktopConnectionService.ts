@@ -12,6 +12,7 @@ import { IStorageService,StorageScope,StorageTarget } from "../../platform/stora
 import {
 REVIEW_DESKTOP_CHANNEL,
 REVIEW_DESKTOP_CONNECTION_VERSION,
+REVIEW_EXTERNAL_SERVER_REJECTED,
 type ReviewDesktopConnection,
 } from "../common/reviewDesktopBootstrap.js";
 import { consumeReviewEventStream } from "../common/reviewEventStream.js";
@@ -477,7 +478,17 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		await reconnectUntilAborted(
 			this.controller.signal,
 			async () => {
-				await this.initialize();
+				try {
+					await this.initialize();
+				} catch (error) {
+					// The other machine's server refused this Desktop; asking main
+					// again would only probe it again.
+					if (error instanceof Error && error.name === REVIEW_EXTERNAL_SERVER_REJECTED) {
+						console.error("[Whiteboard] control channel off: the server refused this Desktop", error);
+						return;
+					}
+					throw error;
+				}
 				await this.maintainControl(dispatch);
 			},
 			{
@@ -500,7 +511,7 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 			}
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
-		throw new Error("The embedded Whiteboard server did not become healthy.");
+		throw new Error("The Whiteboard server did not become healthy.");
 	}
 
 
