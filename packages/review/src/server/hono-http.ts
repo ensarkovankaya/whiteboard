@@ -123,7 +123,8 @@ export function viewerMayRequest(method: string, pathname: string): boolean {
   if (method === "GET" || method === "HEAD") return true;
 
   return (
-    method === "POST" && VIEWER_POST_ROUTES.some((route) => route.test(pathname))
+    method === "POST" &&
+    VIEWER_POST_ROUTES.some((route) => route.test(pathname))
   );
 }
 

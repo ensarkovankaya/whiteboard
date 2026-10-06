@@ -283,9 +283,9 @@ describe("a desktop server with a viewer token", () => {
     const server = await servers.desktop({ viewerToken });
     const headers = { "x-review-token": viewerToken };
 
-    expect(
-      (await fetch(`${server.url}/reviews-api`, { headers })).status,
-    ).toBe(200);
+    expect((await fetch(`${server.url}/reviews-api`, { headers })).status).toBe(
+      200,
+    );
 
     for (const [method, route] of [
       ["POST", "/control/result"],
@@ -332,9 +332,9 @@ describe("a desktop server with a viewer token", () => {
     const server = await servers.desktop();
     const headers = { "x-review-token": viewerToken };
 
-    expect(
-      (await fetch(`${server.url}/reviews-api`, { headers })).status,
-    ).toBe(401);
+    expect((await fetch(`${server.url}/reviews-api`, { headers })).status).toBe(
+      401,
+    );
     expect(
       await (await fetch(`${server.url}/health`, { headers })).json(),
     ).not.toHaveProperty("access");
