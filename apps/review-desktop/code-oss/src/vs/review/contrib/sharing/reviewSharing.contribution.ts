@@ -1,6 +1,6 @@
 import { Disposable } from "../../../base/common/lifecycle.js";
 import { URI } from "../../../base/common/uri.js";
-import { localize2 } from "../../../nls.js";
+import { localize, localize2 } from "../../../nls.js";
 import { Action2, registerAction2 } from "../../../platform/actions/common/actions.js";
 import type { ServicesAccessor } from "../../../platform/instantiation/common/instantiation.js";
 import {
@@ -26,7 +26,13 @@ async function openShare(
 	progress: IProgressService,
 ) {
 	try {
-		const client = new ReviewApiClient(await session.getConnection());
+		const connection = await session.getConnection();
+		// Importing fetches from GitHub on the server machine; a viewer only reads.
+		if (connection.access === "viewer") {
+			notifications.info(localize("review.sharing.viewer", "Open shared reviews on the machine that runs the server."));
+			return;
+		}
+		const client = new ReviewApiClient(connection);
 		await progress.withProgress({ location: ProgressLocation.Notification, title: "Opening shared review" }, async (reporter) => {
 			const started = await client.post<{ reviewId: string }>("/sharing/import", { url });
 			for (;;) {
