@@ -92,7 +92,9 @@ export function AskHistoryButton({ view }: { view: AskView }): ReactElement {
 export function AskHistoryControl(): ReactElement | null {
   const session = useReviewSession();
   const openHistory = useOpenAskHistory();
-  const agents = useAskAgents(openHistory ? session : null);
+  const agents = useAskAgents(
+    openHistory && !session.readOnly ? session : null,
+  );
   const tooltip = useTooltip("Saved conversations");
 
   if (!openHistory || !agents) return null;

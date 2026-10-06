@@ -661,7 +661,7 @@ function ReviewLayoutContent({
               >
                 <DiscordIcon xstyle={controlStyles.chromeIcon} />
               </IconButton>
-              <BugReportControl />
+              {session.readOnly !== true && <BugReportControl />}
               <ReviewBatonChip outcome={review.submissionOutcome} />
               <DiffLayoutControl />
               {!viewOnly &&
@@ -729,10 +729,12 @@ function ReviewLayoutContent({
                     <document.render />
                   </ReviewDocumentBoundary>
                 </article>
-                <AskThreadMarks
-                  articleRef={articleRef}
-                  revision={documentRevision}
-                />
+                {session.readOnly !== true && (
+                  <AskThreadMarks
+                    articleRef={articleRef}
+                    revision={documentRevision}
+                  />
+                )}
               </>
             </div>
             {softwareMapEnabled && activeView === "map" && (

@@ -424,9 +424,16 @@ it("offers no dismissal, source tree, or edits on a read-only review", async () 
   const app = new Hono().route("/reviews-api", createReviewApi(store));
   app.get("/reviews-api/:id/commits", (context) => context.json([]));
 
+  const requests: string[] = [];
   const bridge = testReviewBridge(
     {},
-    { request: async (url, init) => app.request(url, init) },
+    {
+      request: async (url, init) => {
+        requests.push(String(url));
+
+        return app.request(url, init);
+      },
+    },
   );
 
   const container = document.createElement("div");
@@ -451,6 +458,9 @@ it("offers no dismissal, source tree, or edits on a read-only review", async () 
 
   expect(labels).not.toContain("Dismiss");
   expect(labels).not.toContain("Source tree ↗");
+  expect(labels).not.toContain("Report a bug");
+  expect(labels).not.toContain("Saved conversations");
+  expect(requests.some((url) => url.includes("/ask/"))).toBe(false);
 });
 
 it.each([false, true])(
