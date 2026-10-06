@@ -319,6 +319,10 @@ describe("a desktop server with a viewer token", () => {
       `/reviews-api/${reviewId}/ask/threads`,
       `/reviews-api/${reviewId}/ask/mentions`,
       `/reviews-api/${reviewId}/ask`,
+      // The router decodes the path, so an encoded "ask" must not slip past.
+      `/reviews-api/${reviewId}/%61sk/agents/claude/offer`,
+      `/reviews-api/${reviewId}/as%6b/threads`,
+      `/reviews-api/${reviewId}/%61%73%6b`,
     ]) {
       const response = await fetch(`${server.url}${route}`, {
         headers: { "x-review-token": viewerToken },

@@ -103,7 +103,9 @@ export function createReviewServerApp(input: {
 
     if (
       access === "viewer" &&
-      !viewerMayRequest(context.req.method, new URL(context.req.url).pathname)
+      // The decoded path the router matches, so an encoded segment cannot
+      // reach a route the allowlist closes.
+      !viewerMayRequest(context.req.method, context.req.path)
     )
       return serverJson(403, {
         ok: false,
