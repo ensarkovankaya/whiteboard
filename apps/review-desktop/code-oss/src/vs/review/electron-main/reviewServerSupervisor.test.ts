@@ -358,3 +358,29 @@ test('no viewer token reaches the server unless one is configured', () => {
 
 	assert.equal(environment.DEV_FAST_REVIEW_VIEWER_TOKEN, undefined);
 });
+
+test('a bad server setting keeps failing on later start attempts', async (t) => {
+	let created = 0;
+	const supervisor = new ReviewServerSupervisor({
+		appRoot: '/app',
+		appVersion: '0.0.34',
+		isBuilt: true,
+		channel: 'stable',
+		logInfo: () => { },
+		logError: () => { },
+		resolveServerSettings: () => {
+			throw new Error('review.server.port must be a port between 0 and 65535, got 70000.');
+		},
+		createProcess: () => {
+			created += 1;
+			return new FakeServerProcess();
+		},
+	});
+	t.after(() => supervisor.dispose());
+
+	supervisor.start();
+	await assert.rejects(supervisor.whenConnected(), /review\.server\.port.*70000/);
+	supervisor.start();
+
+	assert.equal(created, 0);
+});

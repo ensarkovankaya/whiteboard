@@ -445,8 +445,10 @@ export class ReviewServerSupervisor extends Disposable {
   /** The first start pins the configured port; restarts keep whatever was bound. */
   private applyServerSettings(environment: NodeJS.ProcessEnv): void {
     if (this.serverSettingsApplied) return;
-    this.serverSettingsApplied = true;
+    // Marked applied only after a successful resolve, so a retry after an
+    // invalid setting resolves (and fails) again instead of starting unpinned.
     const settings = this.options.resolveServerSettings?.(environment);
+    this.serverSettingsApplied = true;
     if (!settings) return;
     this.port = settings.port;
     this.viewerToken = settings.viewerToken;
