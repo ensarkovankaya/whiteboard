@@ -1200,6 +1200,93 @@ emit({ type: "complete", succeeded: 0, failed: 0 });
     // The full token still gets the cause.
     expect(JSON.stringify(await frames(server.token))).toContain("dev-fast");
   });
+
+  it("tells a viewer which part of a structural diff failed without diffr's paths", async () => {
+    // Stands in for diffr: every problem it reports names the checkout it read.
+    const diffr = path.join(root, "fake-diffr");
+
+    await writeFile(
+      diffr,
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "config") {
+  process.stdout.write("version = 1\\n");
+  return;
+}
+const where = args[args.indexOf("--repo") + 1];
+const problem = (code) => ({ code, message: "failed open - '" + where + "/.git/objects/66/d4' is locked" });
+const a = { rhs: { path: "a.ts", oid: "2", mode: "100644" } };
+const b = { rhs: { path: "b.ts", oid: "3", mode: "100644" } };
+const emit = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
+emit({
+  type: "start",
+  version: ${STRUCTURAL_DIFF_WIRE_VERSION},
+  lhs: { type: "revision", rev: "base" },
+  rhs: { type: "revision", rev: "head" },
+  files: [{ file: a, status: "added" }, { file: b, status: "added" }],
+});
+emit({ type: "file", file: a, error: problem("read_failed") });
+emit({
+  type: "file",
+  file: b,
+  diff: {
+    type: "text",
+    stats: {
+      textual: { added: 1, removed: 0 },
+      visible: { added: 1, removed: 0 },
+      fallback: problem("parse_failed"),
+    },
+    structural_changes: { base: [], head: [[0, 1]] },
+    rhs: { text: "b\\n" },
+  },
+});
+emit({ type: "annotations", file: b, annotations: [], error: problem("internal") });
+emit({ type: "complete", succeeded: 1, failed: 1, aborted: problem("internal") });
+process.exitCode = 2;
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("REVIEW_DIFFR_BINARY", diffr);
+
+    const { commits, read, repo, server } = await fixture();
+
+    const frames = async (token?: string) =>
+      (await (await read(`/${commits}/structural-diff`, token)).text())
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+
+    /** Every problem the stream reports, in order. */
+    const problems = (events: JsonObject[]) =>
+      JSON.parse(
+        JSON.stringify(
+          events.flatMap((event) =>
+            [
+              event.error,
+              event.aborted,
+              (event.diff as { stats?: { fallback?: unknown } } | undefined)
+                ?.stats?.fallback,
+            ].filter(Boolean),
+          ),
+        ),
+      ) as { code: string; message: string }[];
+
+    const viewed = await frames();
+    const shown = JSON.stringify(viewed);
+
+    expect(problems(viewed).map(({ code }) => code)).toEqual([
+      "read_failed",
+      "parse_failed",
+      "internal",
+      "internal",
+    ]);
+    expect(shown).not.toContain(repo);
+    expect(shown).not.toContain(await realpath(repo));
+
+    // The full token still reads diffr's own words.
+    for (const { message } of problems(await frames(server.token)))
+      expect(message).toContain(await realpath(repo));
+  });
 });
 
 async function firstLine(response: Response): Promise<string> {

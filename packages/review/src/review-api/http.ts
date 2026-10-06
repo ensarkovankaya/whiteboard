@@ -6,6 +6,8 @@ import {
   REVIEW_CLIENT_REMOTE,
   type ReviewApiSummary,
   type ReviewStructuralDiffEvent,
+  type StructuralDiffEvent,
+  type StructuralProblem,
 } from "@dev.fast/review-protocol";
 import { errorMessage } from "@dev.fast/trace-core";
 import {
@@ -220,6 +222,54 @@ function streamFailure(context: Context, error: Error): string {
     return error.message;
 
   return loggedFailure(context, error);
+}
+
+const REMOTE_DIFFR_PROBLEM =
+  "diffr could not finish this part of the comparison. The server logged the cause.";
+
+/**
+ * A diffr record as a remote caller may read it. diffr words each problem
+ * with its full cause chain, which names this machine's paths: the caller
+ * keeps the code, the server log the message.
+ */
+function remoteStructuralEvent(
+  context: Context,
+  event: StructuralDiffEvent,
+): StructuralDiffEvent {
+  const hidden = (problem: StructuralProblem): StructuralProblem => {
+    console.error(
+      `[Review API] ${context.req.method} ${context.req.path} diffr ${problem.code}: ${problem.message}`,
+    );
+
+    return { code: problem.code, message: REMOTE_DIFFR_PROBLEM };
+  };
+
+  switch (event.type) {
+    case "file":
+      if (event.error) return { ...event, error: hidden(event.error) };
+
+      if (event.diff.type === "text" && event.diff.stats.fallback)
+        return {
+          ...event,
+          diff: {
+            ...event.diff,
+            stats: {
+              ...event.diff.stats,
+              fallback: hidden(event.diff.stats.fallback),
+            },
+          },
+        };
+
+      return event;
+    case "annotations":
+      return event.error ? { ...event, error: hidden(event.error) } : event;
+    case "complete":
+      return event.aborted
+        ? { ...event, aborted: hidden(event.aborted) }
+        : event;
+    default:
+      return event;
+  }
 }
 
 /** Reads a path segment named .git, whatever its case (case-insensitive disks). */
@@ -1181,6 +1231,8 @@ export function createReviewApi(
               controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
           };
 
+          const remote = remoteCaller(context);
+
           try {
             for await (const event of data.structuralChanges({
               reviewId: id,
@@ -1189,7 +1241,7 @@ export function createReviewApi(
               file: input.file,
               summaries: !viewerCaller(context),
             }))
-              send(event);
+              send(remote ? remoteStructuralEvent(context, event) : event);
           } catch (error) {
             if (!abort.signal.aborted)
               send({
