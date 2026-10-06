@@ -449,6 +449,42 @@ describe("global Review Desktop verb relay", () => {
     expect(relay.attachViewer(createWriter().writer, "session-0")).toBe(true);
   });
 
+  it("lets the same viewer connection take over its stale slot", async () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const primary = createWriter();
+    const stale = createWriter();
+    const reconnected = createWriter();
+
+    relay.attach(primary.writer);
+    expect(relay.attachViewer(stale.writer, "client2", "window-1")).toBe(true);
+    expect(relay.attachViewer(reconnected.writer, "client2", "window-1")).toBe(
+      true,
+    );
+    expect(stale.close).toHaveBeenCalled();
+
+    void relay.dispatch(openVerb);
+
+    await vi.waitFor(() => expect(reconnected.frames).toHaveLength(1));
+    expect(stale.frames).toHaveLength(0);
+
+    // The old stream's late abort leaves the new one attached.
+    stale.abort.abort();
+    void relay.dispatch(openVerb);
+    await vi.waitFor(() => expect(reconnected.frames).toHaveLength(2));
+  });
+
+  it("keeps another connection of the same app session out", () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+    const first = createWriter();
+
+    expect(relay.attachViewer(first.writer, "client2", "window-1")).toBe(true);
+    expect(
+      relay.attachViewer(createWriter().writer, "client2", "window-2"),
+    ).toBe(false);
+    expect(relay.attachViewer(createWriter().writer, "client2")).toBe(false);
+    expect(first.close).not.toHaveBeenCalled();
+  });
+
   it("drops a viewer whose stream fails, and the primary still answers", async () => {
     const relay = new GlobalReviewDesktopVerbRelay();
     const primary = createWriter();

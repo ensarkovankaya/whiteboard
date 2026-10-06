@@ -310,6 +310,28 @@ describe("a desktop server with a viewer token", () => {
     }
   });
 
+  it("keeps Ask closed to the viewer token, even for GET", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const reviewId = "00000000-0000-4000-8000-000000000000";
+
+    for (const route of [
+      `/reviews-api/${reviewId}/ask/agents/claude/offer`,
+      `/reviews-api/${reviewId}/ask/threads`,
+      `/reviews-api/${reviewId}/ask/mentions`,
+      `/reviews-api/${reviewId}/ask`,
+    ]) {
+      const response = await fetch(`${server.url}${route}`, {
+        headers: { "x-review-token": viewerToken },
+      });
+
+      expect({
+        route,
+        status: response.status,
+        body: await response.json(),
+      }).toEqual({ route, status: 403, body: readOnly });
+    }
+  });
+
   it("lets the viewer token copy context", async () => {
     const server = await servers.desktop({ viewerToken });
 
@@ -391,10 +413,45 @@ describe("a desktop server with a viewer token", () => {
         ).status,
       ).toBe(409);
 
-      // A viewer alone does not make a Desktop available to agents.
+      // The primary Desktop's /control is what makes it attached.
       const health = await (await fetch(`${server.url}/health`)).json();
 
       expect(health.desktopAttached).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it("lets a viewer's own connection reattach over its stale /control", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const abort = new AbortController();
+
+    const viewer = (connection: string) => ({
+      "x-review-token": viewerToken,
+      "x-review-app-session-id": "client2-session",
+      "x-review-control-id": connection,
+    });
+
+    try {
+      const stale = await fetch(`${server.url}/control`, {
+        headers: viewer("window-1"),
+        signal: abort.signal,
+      });
+
+      expect(stale.status).toBe(200);
+      expect(
+        (await fetch(`${server.url}/control`, { headers: viewer("window-2") }))
+          .status,
+      ).toBe(409);
+
+      const reconnected = await fetch(`${server.url}/control`, {
+        headers: viewer("window-1"),
+        signal: abort.signal,
+      });
+
+      expect(reconnected.status).toBe(200);
+      // The replaced stream is ended by the server.
+      await expect(stale.text()).resolves.toBe(": attached\n\n");
     } finally {
       abort.abort();
     }

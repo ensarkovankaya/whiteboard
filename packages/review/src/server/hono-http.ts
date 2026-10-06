@@ -10,6 +10,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { StreamLimitError, readBoundedStream } from "./bounded-stream.js";
 import { DEFAULT_MAX_REQUEST_BYTES, HttpJsonError } from "./http-json";
 
+/** Names one Desktop window's control stream, so it can take over its own stale slot. */
+export const REVIEW_CONTROL_ID_HEADER = "x-review-control-id";
+
 export type ReviewHonoEnv = {
   Bindings: HttpBindings;
 };
@@ -69,7 +72,7 @@ export function applyCorsHeaders(
 
   response.headers.set(
     "access-control-allow-headers",
-    `content-type, x-review-token, ${REVIEW_APP_SESSION_ID_HEADER}`,
+    `content-type, x-review-token, ${REVIEW_APP_SESSION_ID_HEADER}, ${REVIEW_CONTROL_ID_HEADER}`,
   );
   response.headers.set(
     "access-control-allow-methods",
@@ -120,7 +123,13 @@ export function requestAccess(
 // A viewer reads. A route that writes stays closed to it unless listed here.
 const VIEWER_POST_ROUTES = [/^\/reviews-api\/[^/]+\/copy-context$/];
 
+// Ask runs agents and materializes checkouts on the server machine, even for
+// GET, so it stays closed to a viewer whatever the method.
+const VIEWER_CLOSED_ROUTES = [/^\/reviews-api\/[^/]+\/ask(\/|$)/];
+
 export function viewerMayRequest(method: string, pathname: string): boolean {
+  if (VIEWER_CLOSED_ROUTES.some((route) => route.test(pathname))) return false;
+
   if (method === "GET" || method === "HEAD") return true;
 
   return (

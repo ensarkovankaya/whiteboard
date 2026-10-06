@@ -28,6 +28,7 @@ import { z } from "zod";
 
 import type { ReviewDesktopVerbRelay } from "./global-verb-relay";
 import {
+  REVIEW_CONTROL_ID_HEADER,
   type ReviewHonoEnv,
   type ReviewRequestAccess,
   applyCorsHeaders,
@@ -116,7 +117,8 @@ export function createReviewServerApp(input: {
     openControlEvents(
       context,
       input.relay,
-      requestAccess(context.req.raw, input.token, input.viewerToken) ?? "full",
+      requestAccess(context.req.raw, input.token, input.viewerToken) ??
+        "viewer",
     ),
   );
   app.post("/control/result", async (context) => {
@@ -241,6 +243,7 @@ function openControlEvents(
   access: ReviewRequestAccess,
 ): Response {
   const sessionId = context.req.header(REVIEW_APP_SESSION_ID_HEADER);
+  const connectionId = context.req.header(REVIEW_CONTROL_ID_HEADER);
   let attached = false;
 
   const response = streamSSE(context, async (output) => {
@@ -275,7 +278,8 @@ function openControlEvents(
     });
     attached =
       access === "viewer"
-        ? sessionId !== undefined && relay.attachViewer(writer, sessionId)
+        ? sessionId !== undefined &&
+          relay.attachViewer(writer, sessionId, connectionId)
         : relay.attach(writer);
 
     if (!attached) {

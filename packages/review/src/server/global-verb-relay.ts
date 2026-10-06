@@ -41,10 +41,15 @@ export interface GlobalReviewDesktopVerbWriter {
 export interface ReviewDesktopVerbRelay {
   readonly attached: boolean;
   attach(writer: GlobalReviewDesktopVerbWriter): boolean;
-  /** A read-only Desktop on another machine; one per app session. */
+  /**
+   * A read-only Desktop on another machine; one per app session. The same
+   * connection reattaching takes over its slot from a stream not yet noticed
+   * dead.
+   */
   attachViewer(
     writer: GlobalReviewDesktopVerbWriter,
     sessionId: string,
+    connectionId?: string,
   ): boolean;
   dispatch(value: JsonValue): Promise<ReviewVerbResponse>;
   acceptResult(value: JsonValue): boolean;
@@ -66,7 +71,11 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
   /** Viewers by app session; they hear what opens and never answer. */
   private readonly viewers = new Map<
     string,
-    { writer: GlobalReviewDesktopVerbWriter; detach: () => void }
+    {
+      writer: GlobalReviewDesktopVerbWriter;
+      detach: () => void;
+      connectionId?: string;
+    }
   >();
   private readonly timeoutMs: number;
   private readonly maxClients: number;
@@ -106,16 +115,29 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
   attachViewer(
     writer: GlobalReviewDesktopVerbWriter,
     sessionId: string,
+    connectionId?: string,
   ): boolean {
-    if (
-      this.viewers.size >= this.maxViewers ||
-      this.viewers.has(sessionId) ||
-      writer.signal.aborted
-    )
-      return false;
+    if (writer.signal.aborted) return false;
+
+    const current = this.viewers.get(sessionId);
+
+    if (current) {
+      // Over a tunnel a dropped stream can look open for a long time; only the
+      // connection that held the slot may replace it.
+      if (connectionId === undefined || current.connectionId !== connectionId)
+        return false;
+
+      this.detachViewer(sessionId, current.writer);
+
+      try {
+        void Promise.resolve(current.writer.close()).catch(() => undefined);
+      } catch {
+        // Already closed.
+      }
+    } else if (this.viewers.size >= this.maxViewers) return false;
 
     const detach = () => this.detachViewer(sessionId, writer);
-    this.viewers.set(sessionId, { writer, detach });
+    this.viewers.set(sessionId, { writer, detach, connectionId });
     writer.signal.addEventListener("abort", detach, { once: true });
 
     return true;
