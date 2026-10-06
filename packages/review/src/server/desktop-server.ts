@@ -93,6 +93,8 @@ export interface GlobalReviewServerInput {
   cliRuntimePath?: string;
   port: number;
   token?: string;
+  /** The read-only token a remote viewer Desktop presents; absent, no viewer may connect. */
+  viewerToken?: string;
   instanceId?: string;
   identity?: ReviewInstanceIdentity;
   discoveryPath?: string;
@@ -231,6 +233,7 @@ export function createGlobalReviewServer(
     },
     relay,
     token,
+    viewerToken: input.viewerToken,
     instanceId,
     scratchpad: () => scratchpadEnabled,
     status: () => {

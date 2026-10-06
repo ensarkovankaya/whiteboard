@@ -40,7 +40,9 @@ interface Running {
 }
 
 const servers = {
-  async desktop(): Promise<Running> {
+  async desktop(
+    options: { token?: string; viewerToken?: string } = {},
+  ): Promise<Running> {
     const local = openLocalReviewStore(path.join(root, "review-api.db"));
 
     const server = createGlobalReviewServer({
@@ -52,6 +54,8 @@ const servers = {
       port: 0,
       discoveryPath: path.join(root, "desktop-server.json"),
       telemetry: ReviewTelemetry.fromEnv(process.env),
+      token: options.token,
+      viewerToken: options.viewerToken,
     });
 
     stops.push(async () => {
@@ -246,6 +250,110 @@ describe.each(["desktop", "headless"] as const)("the %s server", (kind) => {
       ok: false,
       error: "Invalid JSON body.",
     });
+  });
+});
+
+describe("a desktop server with a viewer token", () => {
+  const viewerToken = "viewer-secret";
+  const readOnly = {
+    ok: false,
+    code: "read-only",
+    error: "This Whiteboard connection is read-only.",
+  };
+
+  it("tells the viewer token it is a viewer, and names no machine or build", async () => {
+    const server = await servers.desktop({ viewerToken });
+
+    const health = await (
+      await fetch(`${server.url}/health`, {
+        headers: { "x-review-token": viewerToken },
+      })
+    ).json();
+
+    expect(health).toEqual({
+      ok: true,
+      instanceId: expect.stringMatching(uuid),
+      desktopAttached: false,
+      version: expect.any(String),
+      access: "viewer",
+    });
+  });
+
+  it("lets the viewer token read, and refuses every write", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const headers = { "x-review-token": viewerToken };
+
+    expect(
+      (await fetch(`${server.url}/reviews-api`, { headers })).status,
+    ).toBe(200);
+
+    for (const [method, route] of [
+      ["POST", "/control/result"],
+      ["POST", "/reviews-api/commands"],
+      ["PUT", "/preferences/scratchpad"],
+      ["DELETE", "/tutorial"],
+      ["POST", "/install/apply"],
+      ["POST", "/telemetry/event"],
+    ] as const) {
+      const response = await fetch(`${server.url}${route}`, {
+        method,
+        headers: { ...headers, "content-type": "application/json" },
+        body: "{}",
+      });
+
+      expect({
+        route,
+        status: response.status,
+        body: await response.json(),
+      }).toEqual({ route, status: 403, body: readOnly });
+    }
+  });
+
+  it("lets the viewer token copy context", async () => {
+    const server = await servers.desktop({ viewerToken });
+
+    const response = await fetch(
+      `${server.url}/reviews-api/00000000-0000-4000-8000-000000000000/copy-context?mode=all`,
+      {
+        method: "POST",
+        headers: {
+          "x-review-token": viewerToken,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    );
+
+    expect(response.status).not.toBe(403);
+    expect(response.status).not.toBe(401);
+  });
+
+  it("refuses a viewer token it was not given", async () => {
+    const server = await servers.desktop();
+    const headers = { "x-review-token": viewerToken };
+
+    expect(
+      (await fetch(`${server.url}/reviews-api`, { headers })).status,
+    ).toBe(401);
+    expect(
+      await (await fetch(`${server.url}/health`, { headers })).json(),
+    ).not.toHaveProperty("access");
+  });
+
+  it("treats a viewer token equal to its own token as the full token", async () => {
+    const server = await servers.desktop({
+      token: "same-secret",
+      viewerToken: "same-secret",
+    });
+
+    const health = await (
+      await fetch(`${server.url}/health`, {
+        headers: { "x-review-token": "same-secret" },
+      })
+    ).json();
+
+    expect(health).toHaveProperty("serverId");
+    expect(health).not.toHaveProperty("access");
   });
 });
 

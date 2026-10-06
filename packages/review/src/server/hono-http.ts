@@ -102,6 +102,31 @@ export function isAuthorizedRequest(
   );
 }
 
+/** Which credential a request carries: the server's own, or the read-only viewer's. */
+export type ReviewRequestAccess = "full" | "viewer";
+
+export function requestAccess(
+  request: Request,
+  token: string,
+  viewerToken?: string,
+): ReviewRequestAccess | null {
+  if (isAuthorizedRequest(request, token)) return "full";
+  if (viewerToken && isAuthorizedRequest(request, viewerToken)) return "viewer";
+
+  return null;
+}
+
+// A viewer reads. A route that writes stays closed to it unless listed here.
+const VIEWER_POST_ROUTES = [/^\/reviews-api\/[^/]+\/copy-context$/];
+
+export function viewerMayRequest(method: string, pathname: string): boolean {
+  if (method === "GET" || method === "HEAD") return true;
+
+  return (
+    method === "POST" && VIEWER_POST_ROUTES.some((route) => route.test(pathname))
+  );
+}
+
 export async function readBoundedRequestJson(
   request: Request,
   maxBytes = DEFAULT_MAX_REQUEST_BYTES,

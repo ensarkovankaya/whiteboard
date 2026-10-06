@@ -66,6 +66,7 @@ export async function runDesktopHost(
     toolingRoot,
     port,
     token: env.DEV_FAST_REVIEW_SERVER_TOKEN,
+    viewerToken: env.DEV_FAST_REVIEW_VIEWER_TOKEN?.trim() || undefined,
     instanceId: env.DEV_FAST_REVIEW_INSTANCE_ID,
     identity: reviewInstanceIdentity(env),
     telemetry,

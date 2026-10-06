@@ -849,6 +849,7 @@ export interface ReviewServerHealth {
   instanceId: string; // new on every start
   desktopAttached: boolean;
   version: string; // package version; equals the Desktop version in release builds
+  access?: "viewer"; // only to the read-only viewer token
 }
 
 /** `GET /health` with the server's token: what identifies the machine and build. */

@@ -30,9 +30,10 @@ import {
   type ReviewHonoEnv,
   applyCorsHeaders,
   corsPreflightResponse,
-  isAuthorizedRequest,
   jsonResponse,
   readBoundedRequestJson,
+  requestAccess,
+  viewerMayRequest,
 } from "./hono-http";
 import { HttpJsonError, ReviewServerError } from "./http-json";
 
@@ -47,6 +48,7 @@ const commit = readBuildCommit(import.meta.url);
  */
 export function createReviewServerApp(input: {
   token: string;
+  viewerToken?: string;
   instanceId: string;
   /** The review store's `serverId()`. */
   serverId: string;
@@ -67,22 +69,44 @@ export function createReviewServerApp(input: {
       version,
     };
 
+    const access = requestAccess(
+      context.req.raw,
+      input.token,
+      input.viewerToken,
+    );
+
     return serverJson(
       200,
-      isAuthorizedRequest(context.req.raw, input.token)
+      access === "full"
         ? ({
             ...health,
             serverId: input.serverId,
             serverPid: process.pid,
             commit,
           } satisfies ReviewServerHealthWithToken)
-        : health,
+        : access === "viewer"
+          ? { ...health, access: "viewer" as const }
+          : health,
     );
   });
   app.use("*", async (context, next) => {
-    if (!isAuthorizedRequest(context.req.raw, input.token)) {
-      return serverJson(401, { ok: false, error: "Unauthorized" });
-    }
+    const access = requestAccess(
+      context.req.raw,
+      input.token,
+      input.viewerToken,
+    );
+
+    if (!access) return serverJson(401, { ok: false, error: "Unauthorized" });
+
+    if (
+      access === "viewer" &&
+      !viewerMayRequest(context.req.method, new URL(context.req.url).pathname)
+    )
+      return serverJson(403, {
+        ok: false,
+        code: "read-only",
+        error: "This Whiteboard connection is read-only.",
+      });
 
     await next();
   });
@@ -119,6 +143,7 @@ export interface WhiteboardCoreInput {
   };
   relay: ReviewDesktopVerbRelay;
   token: string;
+  viewerToken?: string;
   instanceId: string;
   softwareMapEnabled?: boolean;
   scratchpad: () => boolean;
@@ -132,6 +157,7 @@ export function createWhiteboardCore(input: WhiteboardCoreInput) {
 
   const app = createReviewServerApp({
     token: input.token,
+    viewerToken: input.viewerToken,
     instanceId: input.instanceId,
     serverId: store.serverId(),
     relay: input.relay,
