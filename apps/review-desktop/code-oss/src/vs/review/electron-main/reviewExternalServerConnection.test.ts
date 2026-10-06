@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import test from 'node:test';
 
 import { REVIEW_DESKTOP_CONNECTION_VERSION } from '../common/reviewDesktopBootstrap.js';
@@ -113,4 +114,56 @@ test('stopping ends a pending connection', async (t) => {
 	await connection.stop();
 
 	await assert.rejects(pending, /stopped/i);
+});
+
+test('a non-OK answer is retried, and the first failure is logged once', async (t) => {
+	const errors: string[] = [];
+	let calls = 0;
+	const connection = connectionWith(async () => {
+		calls += 1;
+		if (calls < 3) return new Response('bad gateway', { status: 502 });
+		return health('instance-1');
+	}, { errors });
+	t.after(() => connection.dispose());
+
+	assert.equal((await connection.whenConnected()).instanceId, 'instance-1');
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /502/);
+});
+
+test('retrying leaves no abort listeners behind', async (t) => {
+	let calls = 0;
+	const connection = connectionWith(async () => {
+		calls += 1;
+		if (calls < 6) throw new TypeError('fetch failed');
+		return health('instance-1');
+	});
+	t.after(() => connection.dispose());
+
+	await connection.whenConnected();
+
+	const signal = (connection as unknown as { stopped: AbortController }).stopped.signal;
+	assert.equal(getEventListeners(signal, 'abort').length, 0);
+});
+
+test('stopping during an in-flight request rejects promptly and logs nothing', async (t) => {
+	const errors: string[] = [];
+	const connection = new ReviewExternalServerConnection({
+		appVersion: '0.2.0',
+		resolveEndpoint: async () => ({ origin, viewerToken: 'viewer-secret' }),
+		fetch: (_input, init) => new Promise<Response>((_resolve, reject) => {
+			init?.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
+		}),
+		retryDelays: [60_000],
+		logInfo: () => { },
+		logError: (message) => errors.push(message),
+	});
+	t.after(() => connection.dispose());
+
+	const pending = connection.whenConnected();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await connection.stop();
+
+	await assert.rejects(pending, /stopped/i);
+	assert.deepEqual(errors, []);
 });

@@ -85,10 +85,16 @@ export class ReviewExternalServerConnection extends Disposable {
     }
     const fetch = this.options.fetch ?? globalThis.fetch;
     const delays = this.options.retryDelays ?? EXTERNAL_RETRY_DELAYS;
+    let failureLogged = false;
+    const logFirstFailure = (reason: string) => {
+      if (failureLogged) return;
+      failureLogged = true;
+      this.options.logError(
+        `[Review Desktop] cannot reach the Whiteboard server at ${origin}; retrying: ${reason}`,
+      );
+    };
     for (let attempt = 0; ; attempt++) {
-      if (this.stopped.signal.aborted) {
-        throw new Error("The Whiteboard server connection was stopped.");
-      }
+      if (this.stopped.signal.aborted) throw stoppedError();
       let health: unknown;
       try {
         const response = await fetch(`${origin}/health`, {
@@ -98,13 +104,14 @@ export class ReviewExternalServerConnection extends Disposable {
             AbortSignal.timeout(1_500),
           ]),
         });
-        health = response.ok ? await response.json() : undefined;
-      } catch (error) {
-        if (attempt === 0) {
-          this.options.logError(
-            `[Review Desktop] cannot reach the Whiteboard server at ${origin}; retrying: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        if (response.ok) {
+          health = await response.json();
+        } else {
+          logFirstFailure(`HTTP ${response.status}`);
         }
+      } catch (error) {
+        if (this.stopped.signal.aborted) throw stoppedError();
+        logFirstFailure(error instanceof Error ? error.message : String(error));
       }
       if (isRecord(health) && health.ok === true && typeof health.instanceId === "string") {
         if (health.access !== "viewer") {
@@ -127,20 +134,25 @@ export class ReviewExternalServerConnection extends Disposable {
           access: "viewer",
         };
       }
+      if (this.stopped.signal.aborted) throw stoppedError();
       const delay = delays[Math.min(attempt, delays.length - 1)] ?? 0;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delay);
-        this.stopped.signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          this.stopped.signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, delay);
+        this.stopped.signal.addEventListener("abort", onAbort, { once: true });
       });
     }
   }
+}
+
+function stoppedError(): Error {
+  return new Error("The Whiteboard server connection was stopped.");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
