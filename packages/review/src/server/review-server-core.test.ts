@@ -1,5 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -922,6 +923,65 @@ describe("what a viewer token reads", () => {
     expect(await response.json()).toEqual(readOnly);
     expect(response.status).toBe(403);
     expect((await read(route, server.token)).status).not.toBe(403);
+  });
+
+  it("lists agent traces without fetching the pull request into this machine's repository", async () => {
+    const server = await servers.desktop({ viewerToken });
+    const repo = path.join(root, "repo");
+    const upstream = path.join(root, "upstream.git");
+    await mkdir(repo);
+
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.name", "Review Test");
+    git(repo, "config", "user.email", "review-test@example.invalid");
+    git(repo, "config", "commit.gpgsign", "false");
+    await writeFile(path.join(repo, "a.ts"), "export const a = 1;\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "Base");
+    const base = git(repo, "rev-parse", "HEAD");
+    await writeFile(path.join(repo, "a.ts"), "export const a = 2;\n");
+    // A squash merge's subject names its pull request; no trailers survive it.
+    git(repo, "commit", "-qam", "Change things (#7)");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(root, "clone", "-q", "--bare", repo, upstream);
+    git(upstream, "update-ref", "refs/pull/7/head", head);
+    git(repo, "remote", "add", "origin", upstream);
+
+    const created = await fetch(`${server.url}/reviews-api/commands`, {
+      method: "POST",
+      headers: {
+        "x-review-token": server.token,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        operation: {
+          type: "create",
+          title: "Squashed",
+          target: { kind: "commits", repositoryPath: repo, base, head },
+        },
+      }),
+    });
+
+    const { reviewId } = await created.json();
+    const fetched = path.join(repo, ".git", "FETCH_HEAD");
+
+    const traces = (token: string) =>
+      fetch(`${server.url}/reviews-api/${reviewId}/agent-traces`, {
+        headers: { "x-review-token": token },
+      });
+
+    const viewed = await traces(viewerToken);
+
+    expect(viewed.status).toBe(200);
+    expect(await viewed.json()).toMatchObject({ ok: true, sessions: [] });
+    expect(existsSync(fetched)).toBe(false);
+
+    // The full token still looks for the pull request's sessions.
+    expect((await traces(server.token)).status).toBe(200);
+    expect(existsSync(fetched)).toBe(true);
   });
 
   it("shows no stack it would have to ask GitHub for with this machine's login", async () => {

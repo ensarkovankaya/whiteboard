@@ -889,6 +889,11 @@ export function createReviewApi(
       return pins;
     };
 
+    const traceCaller = (context: Context) => ({
+      viewer: viewerCaller(context),
+      remote: remoteCaller(context),
+    });
+
     app.get("/:id/agent-traces", async (context) => {
       const query = traceQuery.parse(context.req.query());
       const pins = tracePins(context.req.param("id"), query.version);
@@ -898,6 +903,7 @@ export function createReviewApi(
           store.repositoryPath(pins.repositoryId),
           pins,
           query.storage,
+          traceCaller(context),
         ),
       );
     });
@@ -913,6 +919,7 @@ export function createReviewApi(
           store.repositoryPath(pins.repositoryId),
           pins,
           query.storage,
+          traceCaller(context),
         );
 
         if (!listed.sessions.some((session) => session.sessionId === sessionId))
@@ -924,6 +931,7 @@ export function createReviewApi(
         sessionId,
         query.trace,
         query.storage,
+        traceCaller(context),
       );
 
       if (!result.ok)
