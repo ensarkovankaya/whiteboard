@@ -110,6 +110,29 @@ export function isAuthorizedRequest(
   );
 }
 
+/** A shorter viewer token could be guessed; viewer access stays off. */
+export const VIEWER_TOKEN_MIN_LENGTH = 32;
+
+/** The viewer token a setting turns on, warning (never quoting it) when it is too short. */
+export function viewerTokenFrom(
+  value: string | undefined,
+  warn: (line: string) => void = (line) => process.stderr.write(line),
+): string | undefined {
+  const token = value?.trim();
+
+  if (!token) return undefined;
+
+  if (token.length < VIEWER_TOKEN_MIN_LENGTH) {
+    warn(
+      `[Review] The viewer token is shorter than ${VIEWER_TOKEN_MIN_LENGTH} characters; remote viewing stays off.\n`,
+    );
+
+    return undefined;
+  }
+
+  return token;
+}
+
 /** Which credential a request carries: the server's own, or the read-only viewer's. */
 export type ReviewRequestAccess = "full" | "viewer";
 

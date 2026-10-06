@@ -117,7 +117,8 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
     sessionId: string,
     connectionId?: string,
   ): boolean {
-    if (writer.signal.aborted) return false;
+    // A blank app session cannot tell one viewer from another.
+    if (writer.signal.aborted || !sessionId.trim()) return false;
 
     const current = this.viewers.get(sessionId);
 

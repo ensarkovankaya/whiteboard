@@ -432,6 +432,13 @@ describe("global Review Desktop verb relay", () => {
     expect(viewer.frames).toHaveLength(0);
   });
 
+  it("refuses a viewer without an app session to tell it apart", () => {
+    const relay = new GlobalReviewDesktopVerbRelay();
+
+    for (const sessionId of ["", "   "])
+      expect(relay.attachViewer(createWriter().writer, sessionId)).toBe(false);
+  });
+
   it("keeps one viewer per app session, eight in all", () => {
     const relay = new GlobalReviewDesktopVerbRelay();
     const first = createWriter();

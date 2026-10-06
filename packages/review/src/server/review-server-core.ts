@@ -274,6 +274,7 @@ function openControlEvents(
     attached =
       access === "viewer"
         ? sessionId !== undefined &&
+          sessionId.trim() !== "" &&
           relay.attachViewer(writer, sessionId, connectionId)
         : relay.attach(writer);
 

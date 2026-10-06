@@ -11,11 +11,12 @@ import { REVIEW_DESKTOP_CONNECTION_VERSION } from '../common/reviewDesktopBootst
 import { ReviewExternalServerConnection } from './reviewExternalServerConnection.js';
 
 const origin = 'http://127.0.0.1:47100';
+const viewerToken = 'viewer-secret-viewer-secret-0001';
 
 function connectionWith(fetch: typeof globalThis.fetch, overrides: { viewerToken?: string; appVersion?: string; errors?: string[] } = {}) {
 	return new ReviewExternalServerConnection({
 		appVersion: overrides.appVersion ?? '0.2.0',
-		resolveEndpoint: async () => ({ origin, viewerToken: 'viewerToken' in overrides ? overrides.viewerToken : 'viewer-secret' }),
+		resolveEndpoint: async () => ({ origin, viewerToken: 'viewerToken' in overrides ? overrides.viewerToken : viewerToken }),
 		fetch,
 		retryDelays: [0],
 		logInfo: () => { },
@@ -36,11 +37,11 @@ test('connects as a viewer with the instance the server names', async (t) => {
 
 	const connected = await connection.whenConnected();
 
-	assert.deepEqual(requests, [{ url: `${origin}/health`, token: 'viewer-secret' }]);
+	assert.deepEqual(requests, [{ url: `${origin}/health`, token: viewerToken }]);
 	assert.deepEqual(connected, {
 		version: REVIEW_DESKTOP_CONNECTION_VERSION,
 		url: origin,
-		token: 'viewer-secret',
+		token: viewerToken,
 		instanceId: 'instance-1',
 		appSessionId: connection.appSessionId,
 		access: 'viewer',
@@ -133,6 +134,25 @@ test('without a viewer token it asks for one before reaching out', async (t) => 
 	assert.equal(calls, 0);
 });
 
+test('a viewer token shorter than 32 characters is refused before reaching out', async (t) => {
+	let calls = 0;
+	const short = 'v'.repeat(31);
+	const connection = connectionWith(async () => {
+		calls += 1;
+		return health('instance-1');
+	}, { viewerToken: short });
+	t.after(() => connection.dispose());
+
+	await assert.rejects(connection.whenConnected(), (error: Error) => {
+		assert.match(error.message, /review\.server\.viewerToken/);
+		assert.match(error.message, /WHITEBOARD_VIEWER_TOKEN/);
+		assert.match(error.message, /32/);
+		assert.doesNotMatch(error.message, new RegExp(short));
+		return true;
+	});
+	assert.equal(calls, 0);
+});
+
 test('logs a version difference and connects anyway', async (t) => {
 	const errors: string[] = [];
 	const connection = connectionWith(async () => health('instance-1'), { appVersion: '0.3.0', errors });
@@ -189,7 +209,7 @@ test('stopping during an in-flight request rejects promptly and logs nothing', a
 	const errors: string[] = [];
 	const connection = new ReviewExternalServerConnection({
 		appVersion: '0.2.0',
-		resolveEndpoint: async () => ({ origin, viewerToken: 'viewer-secret' }),
+		resolveEndpoint: async () => ({ origin, viewerToken }),
 		fetch: (_input, init) => new Promise<Response>((_resolve, reject) => {
 			init?.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
 		}),

@@ -7,6 +7,8 @@ import { REVIEW_SERVER_MODES, REVIEW_SERVER_PORT_SETTING, REVIEW_SERVER_HOST_SET
 
 export const REVIEW_SERVER_PORT_ENV = 'WHITEBOARD_SERVER_PORT';
 export const REVIEW_VIEWER_TOKEN_ENV = 'WHITEBOARD_VIEWER_TOKEN';
+/** The server leaves viewer access off for a shorter token. */
+export const REVIEW_VIEWER_TOKEN_MIN_LENGTH = 32;
 
 export type ReviewServerMode = typeof REVIEW_SERVER_MODES[number];
 

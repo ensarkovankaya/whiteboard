@@ -9,7 +9,7 @@ import {
   REVIEW_DESKTOP_CONNECTION_VERSION,
   type ReviewDesktopConnection,
 } from "../common/reviewDesktopBootstrap.js";
-import { REVIEW_VIEWER_TOKEN_ENV } from "../common/reviewServerSettings.js";
+import { REVIEW_VIEWER_TOKEN_ENV, REVIEW_VIEWER_TOKEN_MIN_LENGTH } from "../common/reviewServerSettings.js";
 import { uuidV7 } from "../common/reviewUuidV7.js";
 
 /** Retry delays while the server is unreachable; the last repeats. */
@@ -81,6 +81,12 @@ export class ReviewExternalServerConnection extends Disposable {
     if (!viewerToken) {
       throw new ReviewExternalServerRejectedError(
         `Set ${REVIEW_SERVER_VIEWER_TOKEN_SETTING} (or ${REVIEW_VIEWER_TOKEN_ENV}) to the viewer token of the Whiteboard server at ${origin}.`,
+      );
+    }
+    // The server turns a shorter token off, so it could never be accepted.
+    if (viewerToken.length < REVIEW_VIEWER_TOKEN_MIN_LENGTH) {
+      throw new ReviewExternalServerRejectedError(
+        `${REVIEW_SERVER_VIEWER_TOKEN_SETTING} (or ${REVIEW_VIEWER_TOKEN_ENV}) must be at least ${REVIEW_VIEWER_TOKEN_MIN_LENGTH} characters, the minimum a Whiteboard server accepts.`,
       );
     }
     const fetch = this.options.fetch ?? globalThis.fetch;

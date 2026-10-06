@@ -591,6 +591,24 @@ describe("a desktop server with a viewer token", () => {
     }
   });
 
+  it("refuses a viewer's /control with an empty app session", async () => {
+    const server = await servers.desktop({ viewerToken });
+
+    for (const sessionId of ["", "   "]) {
+      const response = await fetch(`${server.url}/control`, {
+        headers: {
+          "x-review-token": viewerToken,
+          "x-review-app-session-id": sessionId,
+        },
+      });
+
+      expect({ sessionId, status: response.status }).toEqual({
+        sessionId,
+        status: 409,
+      });
+    }
+  });
+
   it("does not count a viewer as an attached Desktop", async () => {
     const server = await servers.desktop({ viewerToken });
     const abort = new AbortController();

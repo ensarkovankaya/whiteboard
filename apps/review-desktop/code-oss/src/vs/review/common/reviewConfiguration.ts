@@ -112,7 +112,7 @@ configurationRegistry.registerConfiguration({
 			type: 'string',
 			default: '',
 			ignoreSync: true,
-			description: localize('review.server.viewerToken', "The read-only token remote viewers present. Embedded: empty turns remote viewing off. External: the token to connect with. WHITEBOARD_VIEWER_TOKEN overrides it. Takes effect after restarting Whiteboard."),
+			description: localize('review.server.viewerToken', "The read-only token remote viewers present, at least 32 characters. Embedded: empty or shorter turns remote viewing off. External: the token to connect with. WHITEBOARD_VIEWER_TOKEN overrides it. Takes effect after restarting Whiteboard."),
 		},
 	},
 });
