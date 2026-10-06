@@ -425,6 +425,7 @@ it("offers no dismissal, source tree, or edits on a read-only review", async () 
   app.get("/reviews-api/:id/commits", (context) => context.json([]));
 
   const requests: string[] = [];
+
   const bridge = testReviewBridge(
     {},
     {

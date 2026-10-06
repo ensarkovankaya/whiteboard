@@ -1,15 +1,20 @@
 import { expect, it, vi } from "vitest";
 
 import type { ReviewSession } from "./host/review-session";
+import { testReviewSession } from "./review-session-test-utils";
 import { captureUiEvent } from "./ui-telemetry";
 
 const sessionWith = (readOnly: boolean) => {
-  const fetch = vi.fn(async () => new Response(null, { status: 204 }));
-  const session = {
+  const fetch = vi.fn<ReviewSession["fetch"]>(
+    async () => new Response(null, { status: 204 }),
+  );
+
+  const session: ReviewSession = {
+    ...testReviewSession(),
     appSessionId: "app-session",
     readOnly,
     fetch,
-  } as unknown as ReviewSession;
+  };
 
   return { session, fetch };
 };

@@ -255,6 +255,7 @@ describe.each(["desktop", "headless"] as const)("the %s server", (kind) => {
 
 describe("a desktop server with a viewer token", () => {
   const viewerToken = "viewer-secret";
+
   const readOnly = {
     ok: false,
     code: "read-only",
@@ -359,6 +360,7 @@ describe("a desktop server with a viewer token", () => {
   it("attaches a viewer's /control beside the Desktop's, one per app session", async () => {
     const server = await servers.desktop({ viewerToken });
     const abort = new AbortController();
+
     const viewer = {
       "x-review-token": viewerToken,
       "x-review-app-session-id": "client2-session",
@@ -369,6 +371,7 @@ describe("a desktop server with a viewer token", () => {
         headers: { "x-review-token": server.token },
         signal: abort.signal,
       });
+
       const first = await fetch(`${server.url}/control`, {
         headers: viewer,
         signal: abort.signal,

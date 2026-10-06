@@ -111,6 +111,7 @@ export function requestAccess(
   viewerToken?: string,
 ): ReviewRequestAccess | null {
   if (isAuthorizedRequest(request, token)) return "full";
+
   if (viewerToken && isAuthorizedRequest(request, viewerToken)) return "viewer";
 
   return null;

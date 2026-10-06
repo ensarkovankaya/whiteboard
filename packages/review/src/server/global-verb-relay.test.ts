@@ -457,6 +457,7 @@ describe("global Review Desktop verb relay", () => {
     broken.writer.write = () => {
       throw new Error("stream closed");
     };
+
     relay.attach(primary.writer);
     relay.attachViewer(broken.writer, "client2");
 
