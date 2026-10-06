@@ -581,11 +581,13 @@ export interface ReviewCanvasSettingsContent {
   // Not a workbench setting: the review server reads it, so it lives in the
   // server preferences file. Off by default. Turning it on shows the pad and
   // tells connected agents over MCP that they can draw on it; turning it off
-  // hides the pad.
+  // hides the pad. The setter is absent for a read-only connection: the
+  // preference belongs to the server machine.
   scratchpadEnabled: boolean;
-  setScratchpadEnabled(enabled: boolean): Promise<boolean>;
-  // Shared CLI configuration, read when its disclosure opens.
-  diffrConfig: ReviewDiffrConfigActions;
+  setScratchpadEnabled?(enabled: boolean): Promise<boolean>;
+  // Shared CLI configuration, read when its disclosure opens. Absent for a
+  // read-only connection: the configuration belongs to the server machine.
+  diffrConfig?: ReviewDiffrConfigActions;
   reloadWindow(): Promise<void>;
   manageExtensions(): void;
   importVsCodeSettings(): void;
@@ -747,8 +749,9 @@ export type ReviewCanvasContent =
       setupActions?: ReviewCanvasSetupActions;
       onboarding?: ReviewCanvasOnboarding;
       // Opens the tutorial tab. Never gated on install status: the tutorial
-      // needs no agent.
-      openTutorial(): void;
+      // needs no agent. Absent for a read-only connection, whose server
+      // machine owns the tutorial.
+      openTutorial?(): void;
     }
   | {
       kind: "welcome";
@@ -760,8 +763,9 @@ export type ReviewCanvasContent =
       // Drives the step rail. Absent when the install status is unavailable.
       onboarding?: ReviewCanvasOnboarding;
       // Opens the tutorial tab. Never gated on install status: the tutorial
-      // needs no agent.
-      openTutorial(): void;
+      // needs no agent. Absent for a read-only connection, whose server
+      // machine owns the tutorial.
+      openTutorial?(): void;
     }
   | {
       kind: "settings";
