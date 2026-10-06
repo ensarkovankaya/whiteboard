@@ -1176,6 +1176,30 @@ emit({ type: "complete", succeeded: 0, failed: 0 });
       { home: xdg, config: null, gitIgnore: ".env\n" },
     ]);
   });
+
+  it("tells a viewer a structural diff failed without naming the server machine's paths", async () => {
+    const { commits, read, repo, server } = await fixture();
+    // The pinned checkout cannot be prepared under a file.
+    const state = path.join(repo, ".git", "dev-fast");
+    await rm(state, { recursive: true, force: true });
+    await writeFile(state, "not a directory\n");
+
+    const frames = async (token?: string) =>
+      (await (await read(`/${commits}/structural-diff`, token)).text())
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+
+    const viewed = await frames();
+    const shown = JSON.stringify(viewed);
+
+    expect(viewed).toEqual([{ type: "error", message: expect.any(String) }]);
+    expect(shown).not.toContain(repo);
+    expect(shown).not.toContain(await realpath(repo));
+
+    // The full token still gets the cause.
+    expect(JSON.stringify(await frames(server.token))).toContain("dev-fast");
+  });
 });
 
 async function firstLine(response: Response): Promise<string> {

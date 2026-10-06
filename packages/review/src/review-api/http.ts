@@ -192,6 +192,36 @@ const remoteSummary = (summary: ReviewApiSummary): ReviewApiSummary => {
   };
 };
 
+/**
+ * Provider failures may contain local paths/subprocess output: the server log
+ * gets the cause, the caller only its kind. Desktop routes this process's
+ * stderr to its main log.
+ */
+function loggedFailure(context: Context, error: Error): string {
+  console.error(
+    `[Review API] ${context.req.method} ${context.req.path} failed:`,
+    error,
+  );
+
+  return `Whiteboard operation failed (${failureKind(error)}). The server logged the cause; Whiteboard Desktop writes it to main.log in its logs folder.`;
+}
+
+/**
+ * A failure inside a streamed response, as the caller may read it: input
+ * errors as written; for a remote caller anything else only by kind, as
+ * `onError` answers it.
+ */
+function streamFailure(context: Context, error: Error): string {
+  if (
+    error instanceof ReviewInputError ||
+    error instanceof HttpJsonError ||
+    !remoteCaller(context)
+  )
+    return error.message;
+
+  return loggedFailure(context, error);
+}
+
 /** Reads a path segment named .git, whatever its case (case-insensitive disks). */
 const gitPath = (file: string) =>
   file.split(/[\\/]/).some((part) => part.toLowerCase() === ".git");
@@ -240,20 +270,7 @@ export function createReviewApi(
         400,
       );
 
-    // Provider failures may contain local paths/subprocess output: the server
-    // log gets the cause, the response only its kind. Desktop routes this
-    // process's stderr to its main log.
-    console.error(
-      `[Review API] ${context.req.method} ${context.req.path} failed:`,
-      error,
-    );
-
-    return context.json(
-      {
-        error: `Whiteboard operation failed (${failureKind(error)}). The server logged the cause; Whiteboard Desktop writes it to main.log in its logs folder.`,
-      },
-      500,
-    );
+    return context.json({ error: loggedFailure(context, error) }, 500);
   });
 
   if (data)
@@ -1174,10 +1191,14 @@ export function createReviewApi(
             }))
               send(event);
           } catch (error) {
-            send({
-              type: "error",
-              message: error instanceof Error ? error.message : String(error),
-            });
+            if (!abort.signal.aborted)
+              send({
+                type: "error",
+                message: streamFailure(
+                  context,
+                  error instanceof Error ? error : new Error(String(error)),
+                ),
+              });
           } finally {
             if (!abort.signal.aborted) controller.close();
           }
