@@ -31,6 +31,8 @@ import {
   REVIEW_CONTROL_ID_HEADER,
   type ReviewHonoEnv,
   type ReviewRequestAccess,
+  VIEWER_READ_ONLY,
+  answeringRoute,
   applyCorsHeaders,
   corsPreflightResponse,
   jsonResponse,
@@ -103,25 +105,16 @@ export function createReviewServerApp(input: {
 
     if (
       access === "viewer" &&
-      // The decoded path the router matches, so an encoded segment cannot
-      // reach a route the allowlist closes.
-      !viewerMayRequest(context.req.method, context.req.path)
+      !viewerMayRequest(context.req.method, answeringRoute(context))
     )
-      return serverJson(403, {
-        ok: false,
-        code: "read-only",
-        error: "This Whiteboard connection is read-only.",
-      });
+      return serverJson(403, VIEWER_READ_ONLY);
 
+    // Routes read it to treat a viewer as a remote, read-only caller.
+    context.set("access", access);
     await next();
   });
   app.get("/control", (context) =>
-    openControlEvents(
-      context,
-      input.relay,
-      requestAccess(context.req.raw, input.token, input.viewerToken) ??
-        "viewer",
-    ),
+    openControlEvents(context, input.relay, context.get("access")),
   );
   app.post("/control/result", async (context) => {
     const accepted = input.relay.acceptResult(

@@ -64,6 +64,8 @@ export async function reviewProgress(
   signal: AbortSignal = new AbortController().signal,
   mode: "structural" | "textual" = "structural",
   partial?: ComparisonCoverage,
+  /** False for a read-only viewer: coverage it starts runs without LLM summaries. */
+  summaries = true,
 ): Promise<ReviewProgress> {
   // A shared review is read-only and never enters the store, so it has no
   // persisted marks to look up.
@@ -78,7 +80,8 @@ export async function reviewProgress(
   // A document without pins of its own has no changed files; its references
   // each resolve against the comparison their own pins name.
   const comparison: ComparisonCoverage = pins
-    ? (partial ?? (await data.coverage(snapshot.reviewId, pins, mode)))
+    ? (partial ??
+      (await data.coverage(snapshot.reviewId, pins, mode, summaries)))
     : { files: [], fileSources: new Map(), alignments: new Map() };
 
   signal.throwIfAborted();
@@ -96,12 +99,17 @@ export async function reviewProgress(
     if (loading) return loading;
 
     if (partial) {
-      const state = data.coverageSnapshot(snapshot.reviewId, own, mode);
+      const state = data.coverageSnapshot(
+        snapshot.reviewId,
+        own,
+        mode,
+        summaries,
+      );
 
       if (state.pending) return undefined;
     }
 
-    loading = data.coverage(snapshot.reviewId, own, mode);
+    loading = data.coverage(snapshot.reviewId, own, mode, summaries);
     comparisons.set(key, loading);
 
     return loading;

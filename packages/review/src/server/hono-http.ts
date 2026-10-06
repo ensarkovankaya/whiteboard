@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { type JsonValue, parseJsonText } from "@dev.fast/review-protocol";
 import { type HttpBindings, getRequestListener } from "@hono/node-server";
 import { REVIEW_APP_SESSION_ID_HEADER } from "@review/ui-telemetry-events";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import { matchedRoutes } from "hono/route";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 import { StreamLimitError, readBoundedStream } from "./bounded-stream.js";
@@ -15,7 +16,11 @@ export const REVIEW_CONTROL_ID_HEADER = "x-review-control-id";
 
 export type ReviewHonoEnv = {
   Bindings: HttpBindings;
+  Variables: ReviewAccessVariables;
 };
+
+/** Set by the token check on every authenticated request. */
+export type ReviewAccessVariables = { access: ReviewRequestAccess };
 
 export function createNodeRequestListener(
   app: Hono<ReviewHonoEnv>,
@@ -120,22 +125,91 @@ export function requestAccess(
   return null;
 }
 
-// A viewer reads. A route that writes stays closed to it unless listed here.
-const VIEWER_POST_ROUTES = [/^\/reviews-api\/[^/]+\/copy-context$/];
+/**
+ * Everything a read-only viewer may call: the route patterns that show one
+ * review, by method. Whatever is not listed is refused, GET included, so a
+ * route added later stays closed to viewers until it is listed here. Closed on
+ * purpose: Ask, language-context and workspaces (they prepare checkouts and
+ * run commands here), status, capabilities, authoring, instructions, install,
+ * tutorial, preferences, diffr settings, sharing account/login/publish, and
+ * every write but copy-context.
+ */
+const VIEWER_ROUTES = {
+  GET: new Set([
+    // The Desktop verb stream; a viewer hears only what opens a review.
+    "/control",
+    // The review list and its live stream.
+    "/reviews-api",
+    "/reviews-api/watch",
+    // One review: its document at any version, live, with its history.
+    "/reviews-api/:id",
+    "/reviews-api/:id/watch",
+    "/reviews-api/:id/inspect",
+    "/reviews-api/:id/history",
+    "/reviews-api/:id/stack",
+    "/reviews-api/:id/activity",
+    // Its coverage and lenses.
+    "/reviews-api/:id/progress",
+    "/reviews-api/:id/lenses",
+    // Its source; http.ts keeps these to the review's repository and commits.
+    "/reviews-api/:id/commits",
+    "/reviews-api/:id/tree",
+    "/reviews-api/:id/diff",
+    "/reviews-api/:id/file",
+    "/reviews-api/:id/structural-diff",
+    // What the document embeds, and the agent traces of its commits.
+    "/reviews-api/:id/maps/:resourceId",
+    "/reviews-api/:id/resources/:resourceId",
+    "/reviews-api/:id/agent-traces",
+    "/reviews-api/:id/agent-traces/:sessionId",
+    // How the import of a shared review is going.
+    "/reviews-api/sharing/import/:id",
+  ]),
+  POST: new Set([
+    // The Markdown a viewer copies for its own agent; it writes nothing.
+    "/reviews-api/:id/copy-context",
+  ]),
+};
 
-// Ask runs agents and materializes checkouts on the server machine, even for
-// GET, so it stays closed to a viewer whatever the method.
-const VIEWER_CLOSED_ROUTES = [/^\/reviews-api\/[^/]+\/ask(\/|$)/];
+/** What a viewer is told for anything it may not do. */
+export const VIEWER_READ_ONLY = {
+  ok: false,
+  code: "read-only",
+  error: "This Whiteboard connection is read-only.",
+} as const;
 
-export function viewerMayRequest(method: string, pathname: string): boolean {
-  if (VIEWER_CLOSED_ROUTES.some((route) => route.test(pathname))) return false;
+/** A route refuses a viewer something outside the review it shows. */
+export class ViewerReadOnlyError extends Error {
+  constructor() {
+    super(VIEWER_READ_ONLY.error);
+    this.name = "ViewerReadOnlyError";
+  }
+}
 
-  if (method === "GET" || method === "HEAD") return true;
+/** Whether a viewer may call the route that answers `method` (HEAD as GET). */
+export function viewerMayRequest(
+  method: string,
+  route: string | undefined,
+): boolean {
+  const routes =
+    method === "GET" || method === "HEAD"
+      ? VIEWER_ROUTES.GET
+      : method === "POST"
+        ? VIEWER_ROUTES.POST
+        : undefined;
 
-  return (
-    method === "POST" &&
-    VIEWER_POST_ROUTES.some((route) => route.test(pathname))
-  );
+  return route !== undefined && (routes?.has(route) ?? false);
+}
+
+/**
+ * The pattern of the route that will answer this request: the first handler
+ * (not middleware) the router matched for the decoded path, so an encoded
+ * segment or an ambiguous `/:id` cannot stand in for another route.
+ */
+export function answeringRoute(context: Context): string | undefined {
+  const method = context.req.method === "HEAD" ? "GET" : context.req.method;
+
+  return matchedRoutes(context).find((route) => route.method === method)?.path;
 }
 
 export async function readBoundedRequestJson(
