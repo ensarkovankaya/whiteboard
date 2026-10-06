@@ -201,3 +201,30 @@ test("a viewer prepares no tutorial on the server it reads", async (t) => {
 
 	assert.equal(requests, 0);
 });
+
+test("a window names its control stream the same way on every reconnect", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	const other = serviceWith(new TestStorage(), "viewer");
+	t.after(() => {
+		service.dispose();
+		other.dispose();
+	});
+	const controlIds: (string | null)[] = [];
+	mockFetch(t, async (_input, init) => {
+		controlIds.push(new Headers(init?.headers).get("x-review-control-id"));
+		return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
+			headers: { "content-type": "text/event-stream" },
+		});
+	});
+	const consume = (target: ReviewDesktopConnectionService) => (target as unknown as {
+		consumeControl(dispatch: () => Promise<{ ok: true }>, onConnected: () => void): Promise<void>;
+	}).consumeControl(async () => ({ ok: true }), () => { });
+
+	await consume(service);
+	await consume(service);
+	await consume(other);
+
+	assert.equal(typeof controlIds[0], "string");
+	assert.equal(controlIds[1], controlIds[0]);
+	assert.notEqual(controlIds[2], controlIds[0]);
+});

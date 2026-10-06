@@ -5,6 +5,7 @@
 
 import { Emitter,Event } from "../../base/common/event.js";
 import { Disposable } from "../../base/common/lifecycle.js";
+import { generateUuid } from "../../base/common/uuid.js";
 import { createDecorator } from "../../platform/instantiation/common/instantiation.js";
 import { IMainProcessService } from "../../platform/ipc/common/mainProcessService.js";
 import { IStorageService,StorageScope,StorageTarget } from "../../platform/storage/common/storage.js";
@@ -105,6 +106,12 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 	private readonly controller = new AbortController();
 	private controlAttached = false;
 	private controlDispatch: ((value: JsonValue) => Promise<ReviewVerbResponse>) | undefined;
+	/**
+	 * Names this window's control stream on every reconnect, so a viewer's
+	 * reconnect can take over its own slot from a stream the server has not yet
+	 * noticed is dead, without evicting another window of the same app.
+	 */
+	private readonly controlId = generateUuid();
 	/**
 	 * The main process owns the embedded server's endpoint and credentials and
 	 * publishes them only once it has validated the server's ready event.
@@ -520,7 +527,10 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		const url = new URL("/control", this.serverUrl);
 		url.searchParams.set("token", this.token);
 		const response = await fetch(url, {
-			headers: { "x-review-app-session-id": this.requireConnection().appSessionId },
+			headers: {
+				"x-review-app-session-id": this.requireConnection().appSessionId,
+				"x-review-control-id": this.controlId,
+			},
 			signal: this.controller.signal,
 		});
 		if (!response.ok || !response.body) {
