@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { REVIEW_EXTERNAL_SERVER_REJECTED } from "../common/reviewDesktopBootstrap.js";
 import { ReviewDesktopConnectionService } from "./reviewDesktopConnectionService.js";
 
 const uuid = "11111111-1111-4111-8111-111111111111";
@@ -25,7 +26,7 @@ class TestStorage {
 	}
 }
 
-function serviceWith(storage = new TestStorage()): ReviewDesktopConnectionService {
+function serviceWith(storage = new TestStorage(), access?: "full" | "viewer"): ReviewDesktopConnectionService {
 	const service = new ReviewDesktopConnectionService({} as never, storage as never);
 	Object.assign(service, {
 		connection: {
@@ -33,6 +34,8 @@ function serviceWith(storage = new TestStorage()): ReviewDesktopConnectionServic
 			url: "http://127.0.0.1:5000",
 			token: "token",
 			instanceId: "instance",
+			appSessionId: "session",
+			...(access ? { access } : {}),
 		},
 		initializePromise: Promise.resolve(),
 	});
@@ -143,4 +146,117 @@ test("tutorial deletion suppresses auto-prepare across restarts until explicit o
 	assert.equal(requests.length, 3);
 	assert.match(requests[2] ?? "", /POST .*\/tutorial\/prepare$/);
 	restoredService.dispose();
+});
+
+test("a connection without access is a full one", async (t) => {
+	const service = serviceWith();
+	t.after(() => service.dispose());
+
+	assert.equal((await service.getConnection()).access, "full");
+});
+
+test("a viewer opens what the server sends, names its app session, and answers nothing", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	t.after(() => service.dispose());
+	const requests: { url: string; method: string; session: string | null }[] = [];
+	const frame = `data: ${JSON.stringify({ event: "desktop-verb", id: uuid, request: { name: "openApiReview", args: { reviewId: uuid, title: "Review" } } })}\n\n`;
+	mockFetch(t, async (input, init) => {
+		requests.push({
+			url: String(input),
+			method: init?.method ?? "GET",
+			session: new Headers(init?.headers).get("x-review-app-session-id"),
+		});
+		if (String(input).includes("/control?")) {
+			return new Response(new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(frame));
+					controller.close();
+				},
+			}), { headers: { "content-type": "text/event-stream" } });
+		}
+		return Response.json({ ok: true });
+	});
+	const dispatched: unknown[] = [];
+
+	await (service as unknown as {
+		consumeControl(dispatch: (value: unknown) => Promise<{ ok: true }>, onConnected: () => void): Promise<void>;
+	}).consumeControl(async (value) => {
+		dispatched.push(value);
+		return { ok: true };
+	}, () => { });
+
+	assert.equal(dispatched.length, 1);
+	assert.deepEqual(requests.map(({ method, session }) => ({ method, session })), [{ method: "GET", session: "session" }]);
+});
+
+test("a viewer prepares no tutorial on the server it reads", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	t.after(() => service.dispose());
+	let requests = 0;
+	mockFetch(t, async () => {
+		requests += 1;
+		return Response.json({ ok: true });
+	});
+
+	await service.prepareTutorial();
+
+	assert.equal(requests, 0);
+});
+
+test("a window names its control stream the same way on every reconnect", async (t) => {
+	const service = serviceWith(new TestStorage(), "viewer");
+	const other = serviceWith(new TestStorage(), "viewer");
+	t.after(() => {
+		service.dispose();
+		other.dispose();
+	});
+	const controlIds: (string | null)[] = [];
+	mockFetch(t, async (_input, init) => {
+		controlIds.push(new Headers(init?.headers).get("x-review-control-id"));
+		return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
+			headers: { "content-type": "text/event-stream" },
+		});
+	});
+	const consume = (target: ReviewDesktopConnectionService) => (target as unknown as {
+		consumeControl(dispatch: () => Promise<{ ok: true }>, onConnected: () => void): Promise<void>;
+	}).consumeControl(async () => ({ ok: true }), () => { });
+
+	await consume(service);
+	await consume(service);
+	await consume(other);
+
+	assert.equal(typeof controlIds[0], "string");
+	assert.equal(controlIds[1], controlIds[0]);
+	assert.notEqual(controlIds[2], controlIds[0]);
+});
+
+test("a refused viewer stops its control channel, while a passing failure retries", async (t) => {
+	t.mock.method(console, "error", () => { });
+	const asks = { refused: 0, passing: 0 };
+	// Main's refusal as it arrives over IPC: an Error carrying the class's name.
+	const refusal = Object.assign(new Error("The Whiteboard server did not accept the viewer token."), {
+		name: REVIEW_EXTERNAL_SERVER_REJECTED,
+	});
+	const failing = (kind: keyof typeof asks, error: Error) => new ReviewDesktopConnectionService({
+		getChannel: () => ({
+			call: async () => {
+				asks[kind] += 1;
+				throw error;
+			},
+		}),
+	} as never, new TestStorage() as never);
+	const refused = failing("refused", refusal);
+	const passing = failing("passing", new Error("main is still starting"));
+	t.after(() => {
+		refused.dispose();
+		passing.dispose();
+	});
+
+	refused.attachControl(async () => ({ ok: true }));
+	passing.attachControl(async () => ({ ok: true }));
+	// Past the first retry delay (250 ms).
+	await new Promise((resolve) => setTimeout(resolve, 600));
+
+	assert.equal(asks.refused, 1);
+	assert.ok(asks.passing >= 2, `asked ${asks.passing} times`);
 });

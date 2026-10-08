@@ -148,8 +148,16 @@ export async function listReviewTraceSessions(input: {
   baseCommit: string;
   headCommit: string;
   storage?: TraceStorage | null;
+  /**
+   * Only what this machine already has: the range's own trailers and saved
+   * copies. No store is asked and no pull request is fetched.
+   */
+  offline?: boolean;
 }): Promise<ReviewTraceSessionDescriptor[]> {
-  const storage = await storageFor(input.storage, input.rootPath);
+  const storage = input.offline
+    ? null
+    : await storageFor(input.storage, input.rootPath);
+
   const sessions = new Map<string, ReviewTraceSessionRef>();
   const commits = await commitsWithTrailers(input);
 
@@ -172,7 +180,11 @@ export async function listReviewTraceSessions(input: {
     await addSessionsFromStoreIndex(storage, commits, sessions);
   }
 
-  if (sessions.size === 0 && commits.length <= STORE_COMMIT_LOOKUP_LIMIT) {
+  if (
+    !input.offline &&
+    sessions.size === 0 &&
+    commits.length <= STORE_COMMIT_LOOKUP_LIMIT
+  ) {
     await addSessionsFromPrScan(input.rootPath, commits, sessions);
   }
 

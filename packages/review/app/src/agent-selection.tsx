@@ -65,7 +65,7 @@ export function AgentSelectionProvider({
   const session = useReviewSession();
   const panels = useOptionalReviewPanelStore();
   // Ask needs a panel to answer in and a host that runs agents (Desktop).
-  const askAgents = useAskAgents(panels ? session : null);
+  const askAgents = useAskAgents(panels && !session.readOnly ? session : null);
   const checkoutGone = useReviewDiffFiles().status === "unavailable";
   const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
 

@@ -14,6 +14,7 @@ import { reviewTelemetryChannel } from "@review/telemetry-config";
 
 import { listenForDesktopHostShutdown } from "./desktop-host-shutdown";
 import { createGlobalReviewServer } from "./desktop-server";
+import { viewerTokenFrom } from "./hono-http";
 import {
   drainServerCrashReport,
   installProcessErrorTelemetry,
@@ -66,6 +67,7 @@ export async function runDesktopHost(
     toolingRoot,
     port,
     token: env.DEV_FAST_REVIEW_SERVER_TOKEN,
+    viewerToken: viewerTokenFrom(env.DEV_FAST_REVIEW_VIEWER_TOKEN),
     instanceId: env.DEV_FAST_REVIEW_INSTANCE_ID,
     identity: reviewInstanceIdentity(env),
     telemetry,

@@ -239,7 +239,8 @@ export function ReviewLensesProvider({
     viewed,
     collapseLens = false,
   ) => {
-    if (!progress || pending.current) return;
+    // The server refuses a read-only connection's marks.
+    if (session.readOnly === true || !progress || pending.current) return;
     pending.current = true;
     const currentGeneration = generation.current;
 

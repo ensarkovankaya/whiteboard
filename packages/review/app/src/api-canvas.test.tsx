@@ -414,6 +414,56 @@ it("dismisses immediately through the API without changing the saved document", 
   expect(store.read(reviewId).version).toBe(0);
 });
 
+it("offers no dismissal, source tree, or edits on a read-only review", async () => {
+  const { reviewId } = await command({
+    type: "create",
+    title: "Read only",
+    target: { kind: "commits", ...pins },
+  });
+
+  const app = new Hono().route("/reviews-api", createReviewApi(store));
+  app.get("/reviews-api/:id/commits", (context) => context.json([]));
+
+  const requests: string[] = [];
+
+  const bridge = testReviewBridge(
+    {},
+    {
+      request: async (url, init) => {
+        requests.push(String(url));
+
+        return app.request(url, init);
+      },
+    },
+  );
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => {
+    canvas = mount(container, {
+      kind: "api",
+      reviewId,
+      bridge,
+      readOnly: true,
+    });
+  });
+  await act(async () => {
+    await vi.waitFor(() =>
+      expect(container.querySelector("h1")?.textContent).toBe("Read only"),
+    );
+  });
+
+  const labels = [...container.querySelectorAll("button")].map(
+    (button) => button.getAttribute("aria-label") ?? button.textContent,
+  );
+
+  expect(labels).not.toContain("Dismiss");
+  expect(labels).not.toContain("Source tree ↗");
+  expect(labels).not.toContain("Report a bug");
+  expect(labels).not.toContain("Saved conversations");
+  expect(requests.some((url) => url.includes("/ask/"))).toBe(false);
+});
+
 it.each([false, true])(
   "adds a retained trace (inline=%s) live and opens its full conversation",
   async (inline) => {
@@ -900,7 +950,8 @@ it("reads a worktree review's range as its base against the working tree, and a 
   }
 });
 
-it("offers to dismiss a review whose worktree is gone, without reading its diff", async () => {
+/** A store holding a worktree review whose checkout was removed since. */
+async function goneWorktreeReview() {
   let removed = false;
 
   const gone = new ReviewStore(path.join(directory, "gone.db"), {
@@ -918,35 +969,42 @@ it("offers to dismiss a review whose worktree is gone, without reading its diff"
     validateResource: async () => {},
   });
 
-  try {
-    const { reviewId } = await gone.execute({
-      operation: {
-        type: "create",
-        title: "Moved review",
-        target: { kind: "worktree", repositoryId: pins.repositoryId },
-      },
-    });
+  const { reviewId } = await gone.execute({
+    operation: {
+      type: "create",
+      title: "Moved review",
+      target: { kind: "worktree", repositoryId: pins.repositoryId },
+    },
+  });
 
-    await gone.execute({
-      operation: {
-        type: "edit",
-        reviewId,
-        edit: {
-          type: "insert",
-          content: {
-            type: "code_peek",
-            source: rangeAnchor({
-              side: "head",
-              file: "src/a.ts",
-              fromLine: 1,
-              toLine: 2,
-            }),
-          },
+  await gone.execute({
+    operation: {
+      type: "edit",
+      reviewId,
+      edit: {
+        type: "insert",
+        content: {
+          type: "code_peek",
+          source: rangeAnchor({
+            side: "head",
+            file: "src/a.ts",
+            fromLine: 1,
+            toLine: 2,
+          }),
         },
       },
-    });
-    removed = true;
-    await gone.refreshWorktrees();
+    },
+  });
+  removed = true;
+  await gone.refreshWorktrees();
+
+  return { gone, reviewId };
+}
+
+it("offers to dismiss a review whose worktree is gone, without reading its diff", async () => {
+  const { gone, reviewId } = await goneWorktreeReview();
+
+  try {
     const app = new Hono().route("/reviews-api", createReviewApi(gone));
     const commits = vi.fn<() => Response>(() => new Response("[]"));
     app.get("/reviews-api/:id/commits", commits);
@@ -998,6 +1056,46 @@ it("offers to dismiss a review whose worktree is gone, without reading its diff"
       expect(gone.list()[0]?.dismissedAt).toEqual(expect.any(String)),
     );
     expect(dismiss()).toBeUndefined();
+  } finally {
+    await gone.close();
+  }
+});
+
+it("offers a viewer no dismissal of a review whose worktree is gone", async () => {
+  const { gone, reviewId } = await goneWorktreeReview();
+
+  try {
+    const app = new Hono().route("/reviews-api", createReviewApi(gone));
+    app.get("/reviews-api/:id/commits", () => new Response("[]"));
+
+    const bridge = testReviewBridge(
+      {},
+      { request: async (url, init) => app.request(url, init) },
+    );
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    await act(async () => {
+      canvas = mount(container, {
+        kind: "api",
+        reviewId,
+        bridge,
+        readOnly: true,
+      });
+    });
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(container.textContent).toContain(
+          "This review's worktree was removed.",
+        ),
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll("button")].map(
+        (button) => button.textContent,
+      ),
+    ).not.toContain("Dismiss review");
   } finally {
     await gone.close();
   }
@@ -1196,4 +1294,67 @@ it("builds the full diff only once the Diff view is shown", async () => {
       .click(),
   );
   await act(async () => vi.waitFor(() => expect(create).toHaveBeenCalled()));
+});
+
+it("offers no viewed marks on a read-only review's diff", async () => {
+  const review = await command({
+    type: "create",
+    title: "Read-only diff",
+    target: { kind: "commits", ...pins },
+  });
+
+  const app = new Hono().route("/reviews-api", createReviewApi(store));
+
+  app.get("/reviews-api/:id/commits", (context) => context.json([]));
+
+  const create = vi.fn<ReviewCanvasBridge["diffView"]["create"]>(() => {
+    throw new Error("Diff is not mounted by this test.");
+  });
+
+  const bridge = testReviewBridge(
+    {},
+    {
+      request: async (url, init) => app.request(url, init),
+      diffView: {
+        files: async () => [
+          { path: "a.ts", status: "modified", additions: 1, deletions: 1 },
+        ],
+        create,
+      },
+    },
+  );
+
+  const container = document.createElement("div");
+
+  document.body.append(container);
+  await act(async () => {
+    canvas = mount(container, {
+      kind: "api",
+      reviewId: review.reviewId,
+      bridge,
+      readOnly: true,
+    });
+  });
+  await act(async () =>
+    vi.waitFor(() =>
+      expect(container.querySelector("h1")?.textContent).toBe("Read-only diff"),
+    ),
+  );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Diff"]')!
+      .click(),
+  );
+  await act(async () => vi.waitFor(() => expect(create).toHaveBeenCalled()));
+
+  expect(
+    create.mock.calls.map(([options]) => options.onToggleViewed),
+  ).not.toContainEqual(expect.any(Function));
+  expect(
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label^="Mark "]',
+      ),
+    ].filter((button) => !button.disabled),
+  ).toEqual([]);
 });

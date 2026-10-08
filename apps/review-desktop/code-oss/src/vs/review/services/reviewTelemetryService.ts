@@ -111,7 +111,8 @@ export class ReviewTelemetryService implements IReviewTelemetryService {
 
 	private send(event: QueuedReviewTelemetryEvent): void {
 		const connection = this.connection;
-		if (!connection) return;
+		// A viewer's events would land in another machine's installation.
+		if (!connection || connection.access === "viewer") return;
 		let request: Promise<void>;
 		request = fetch(
 			`${connection.url}/telemetry/event`,

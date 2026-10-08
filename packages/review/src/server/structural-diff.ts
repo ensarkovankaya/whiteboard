@@ -9,6 +9,8 @@ import {
   decodeStructuralDiffEvent,
 } from "@dev.fast/review-protocol";
 
+import { summaryFreeDiffrEnvironment } from "./diffr-summary-free.js";
+
 export type DiffComparison =
   | { kind: "trees"; base: string; head: string }
   | { kind: "merge-base"; base: string; head: string }
@@ -20,6 +22,8 @@ export interface StructuralDiffRequest {
   comparison: DiffComparison;
   paths?: readonly string[];
   signal: AbortSignal;
+  /** False for a read-only viewer: no LLM summaries on this machine's keys. */
+  summaries?: boolean;
 }
 
 export function diffrExecutable(): string {
@@ -71,10 +75,26 @@ export async function* structuralDiff(
   // diffr reads the user's config and keys exactly as it would from a shell.
   console.info(`[Review] structural diff: ${executable} ${args.join(" ")}`);
 
+  let settings:
+    | Awaited<ReturnType<typeof summaryFreeDiffrEnvironment>>
+    | undefined;
+
+  try {
+    settings =
+      input.summaries === false
+        ? await summaryFreeDiffrEnvironment(executable, input.repositoryPath)
+        : undefined;
+  } catch (error) {
+    // Nothing runs, so nothing is left to time out.
+    clearTimeout(idle);
+    throw error;
+  }
+
   const child = spawn(executable, args, {
     cwd: input.repositoryPath,
     stdio: ["ignore", "pipe", "pipe"],
     signal,
+    env: settings?.env,
   });
 
   let stderr = "";
@@ -155,5 +175,6 @@ export async function* structuralDiff(
 
     if (child.exitCode === null) child.kill();
     await exited.catch(() => {});
+    await settings?.dispose();
   }
 }

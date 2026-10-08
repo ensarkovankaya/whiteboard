@@ -20,6 +20,7 @@ import type { LocalReviewData } from "@review/review-api/local-data.js";
 import type { ReviewStore } from "@review/review-api/store.js";
 import { mountSharingPublisher } from "@review/sharing/host.js";
 import type { SharedReviewStore } from "@review/sharing/import.js";
+import { REVIEW_APP_SESSION_ID_HEADER } from "@review/ui-telemetry-events";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -27,12 +28,17 @@ import { z } from "zod";
 
 import type { ReviewDesktopVerbRelay } from "./global-verb-relay";
 import {
+  REVIEW_CONTROL_ID_HEADER,
   type ReviewHonoEnv,
+  type ReviewRequestAccess,
+  VIEWER_READ_ONLY,
+  answeringRoute,
   applyCorsHeaders,
   corsPreflightResponse,
-  isAuthorizedRequest,
   jsonResponse,
   readBoundedRequestJson,
+  requestAccess,
+  viewerMayRequest,
 } from "./hono-http";
 import { HttpJsonError, ReviewServerError } from "./http-json";
 
@@ -47,6 +53,7 @@ const commit = readBuildCommit(import.meta.url);
  */
 export function createReviewServerApp(input: {
   token: string;
+  viewerToken?: string;
   instanceId: string;
   /** The review store's `serverId()`. */
   serverId: string;
@@ -67,26 +74,48 @@ export function createReviewServerApp(input: {
       version,
     };
 
+    const access = requestAccess(
+      context.req.raw,
+      input.token,
+      input.viewerToken,
+    );
+
     return serverJson(
       200,
-      isAuthorizedRequest(context.req.raw, input.token)
+      access === "full"
         ? ({
             ...health,
             serverId: input.serverId,
             serverPid: process.pid,
             commit,
           } satisfies ReviewServerHealthWithToken)
-        : health,
+        : access === "viewer"
+          ? { ...health, access: "viewer" as const }
+          : health,
     );
   });
   app.use("*", async (context, next) => {
-    if (!isAuthorizedRequest(context.req.raw, input.token)) {
-      return serverJson(401, { ok: false, error: "Unauthorized" });
-    }
+    const access = requestAccess(
+      context.req.raw,
+      input.token,
+      input.viewerToken,
+    );
 
+    if (!access) return serverJson(401, { ok: false, error: "Unauthorized" });
+
+    if (
+      access === "viewer" &&
+      !viewerMayRequest(context.req.method, answeringRoute(context))
+    )
+      return serverJson(403, VIEWER_READ_ONLY);
+
+    // Routes read it to treat a viewer as a remote, read-only caller.
+    context.set("access", access);
     await next();
   });
-  app.get("/control", (context) => openControlEvents(context, input.relay));
+  app.get("/control", (context) =>
+    openControlEvents(context, input.relay, context.get("access")),
+  );
   app.post("/control/result", async (context) => {
     const accepted = input.relay.acceptResult(
       await readBoundedRequestJson(context.req.raw),
@@ -119,6 +148,7 @@ export interface WhiteboardCoreInput {
   };
   relay: ReviewDesktopVerbRelay;
   token: string;
+  viewerToken?: string;
   instanceId: string;
   softwareMapEnabled?: boolean;
   scratchpad: () => boolean;
@@ -132,6 +162,7 @@ export function createWhiteboardCore(input: WhiteboardCoreInput) {
 
   const app = createReviewServerApp({
     token: input.token,
+    viewerToken: input.viewerToken,
     instanceId: input.instanceId,
     serverId: store.serverId(),
     relay: input.relay,
@@ -204,7 +235,10 @@ export function relayReviewCallbacks(
 function openControlEvents(
   context: Context<ReviewHonoEnv>,
   relay: ReviewDesktopVerbRelay,
+  access: ReviewRequestAccess,
 ): Response {
+  const sessionId = context.req.header(REVIEW_APP_SESSION_ID_HEADER);
+  const connectionId = context.req.header(REVIEW_CONTROL_ID_HEADER);
   let attached = false;
 
   const response = streamSSE(context, async (output) => {
@@ -237,7 +271,12 @@ function openControlEvents(
       abort.abort();
       finish();
     });
-    attached = relay.attach(writer);
+    attached =
+      access === "viewer"
+        ? sessionId !== undefined &&
+          sessionId.trim() !== "" &&
+          relay.attachViewer(writer, sessionId, connectionId)
+        : relay.attach(writer);
 
     if (!attached) {
       finish();

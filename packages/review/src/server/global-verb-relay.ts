@@ -12,6 +12,15 @@ const DEFAULT_VERB_TIMEOUT_MS = 45_000;
 
 const DEFAULT_MAX_CLIENTS = 16;
 
+const DEFAULT_MAX_VIEWERS = 8;
+
+/** What a viewer also receives: verbs that show a review and change nothing. */
+const VIEWER_VERBS: ReadonlySet<string> = new Set([
+  "openApiReview",
+  "openReview",
+  "showReviewView",
+]);
+
 const NOT_ATTACHED = "No Whiteboard Desktop is attached.";
 
 interface PendingVerb {
@@ -32,6 +41,16 @@ export interface GlobalReviewDesktopVerbWriter {
 export interface ReviewDesktopVerbRelay {
   readonly attached: boolean;
   attach(writer: GlobalReviewDesktopVerbWriter): boolean;
+  /**
+   * A read-only Desktop on another machine; one per app session. The same
+   * connection reattaching takes over its slot from a stream not yet noticed
+   * dead.
+   */
+  attachViewer(
+    writer: GlobalReviewDesktopVerbWriter,
+    sessionId: string,
+    connectionId?: string,
+  ): boolean;
   dispatch(value: JsonValue): Promise<ReviewVerbResponse>;
   acceptResult(value: JsonValue): boolean;
   close(): void;
@@ -49,12 +68,29 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
   >();
   /** Each verb in flight, under every frame id it was sent with. */
   private readonly pending = new Map<string, PendingVerb>();
+  /** Viewers by app session; they hear what opens and never answer. */
+  private readonly viewers = new Map<
+    string,
+    {
+      writer: GlobalReviewDesktopVerbWriter;
+      detach: () => void;
+      connectionId?: string;
+    }
+  >();
   private readonly timeoutMs: number;
   private readonly maxClients: number;
+  private readonly maxViewers: number;
 
-  constructor(options: { timeoutMs?: number; maxClients?: number } = {}) {
+  constructor(
+    options: {
+      timeoutMs?: number;
+      maxClients?: number;
+      maxViewers?: number;
+    } = {},
+  ) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_VERB_TIMEOUT_MS;
     this.maxClients = options.maxClients ?? DEFAULT_MAX_CLIENTS;
+    this.maxViewers = options.maxViewers ?? DEFAULT_MAX_VIEWERS;
   }
 
   get attached(): boolean {
@@ -76,12 +112,46 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
     return true;
   }
 
+  attachViewer(
+    writer: GlobalReviewDesktopVerbWriter,
+    sessionId: string,
+    connectionId?: string,
+  ): boolean {
+    // A blank app session cannot tell one viewer from another.
+    if (writer.signal.aborted || !sessionId.trim()) return false;
+
+    const current = this.viewers.get(sessionId);
+
+    if (current) {
+      // Over a tunnel a dropped stream can look open for a long time; only the
+      // connection that held the slot may replace it.
+      if (connectionId === undefined || current.connectionId !== connectionId)
+        return false;
+
+      this.detachViewer(sessionId, current.writer);
+
+      try {
+        void Promise.resolve(current.writer.close()).catch(() => undefined);
+      } catch {
+        // Already closed.
+      }
+    } else if (this.viewers.size >= this.maxViewers) return false;
+
+    const detach = () => this.detachViewer(sessionId, writer);
+    this.viewers.set(sessionId, { writer, detach, connectionId });
+    writer.signal.addEventListener("abort", detach, { once: true });
+
+    return true;
+  }
+
   dispatch(value: JsonValue): Promise<ReviewVerbResponse> {
     const request: ReviewVerbRequest = parseReviewVerbRequest(value);
 
     if (this.clients.size === 0) {
       return Promise.resolve({ ok: false, error: NOT_ATTACHED });
     }
+
+    this.mirror(request);
 
     return new Promise<ReviewVerbResponse>((resolve) => {
       const verb: PendingVerb = {
@@ -158,6 +228,16 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
         // Already closed.
       }
     }
+
+    for (const [sessionId, { writer }] of [...this.viewers]) {
+      this.detachViewer(sessionId, writer);
+
+      try {
+        void Promise.resolve(writer.close()).catch(() => undefined);
+      } catch {
+        // Already closed.
+      }
+    }
   }
 
   private detach(writer: GlobalReviewDesktopVerbWriter): void {
@@ -169,6 +249,34 @@ export class GlobalReviewDesktopVerbRelay implements ReviewDesktopVerbRelay {
 
     for (const [id, verb] of [...this.pending]) {
       if (verb.waiting.get(id) === writer) this.stopWaiting(verb, id);
+    }
+  }
+
+  private detachViewer(
+    sessionId: string,
+    writer: GlobalReviewDesktopVerbWriter,
+  ): void {
+    const viewer = this.viewers.get(sessionId);
+
+    if (viewer?.writer !== writer) return;
+    writer.signal.removeEventListener("abort", viewer.detach);
+    this.viewers.delete(sessionId);
+  }
+
+  /** Viewers get their own frame ids, which no result is ever matched against. */
+  private mirror(request: ReviewVerbRequest): void {
+    if (!VIEWER_VERBS.has(request.name)) return;
+
+    for (const [sessionId, { writer }] of [...this.viewers]) {
+      const frame = `data: ${JSON.stringify({ event: "desktop-verb", id: crypto.randomUUID(), request })}\n\n`;
+
+      try {
+        void Promise.resolve(writer.write(frame)).catch(() => {
+          this.detachViewer(sessionId, writer);
+        });
+      } catch {
+        this.detachViewer(sessionId, writer);
+      }
     }
   }
 

@@ -124,7 +124,7 @@ export class ReviewApiSourceService extends Disposable implements IReviewApiSour
 							resource,
 						)
 					);
-					if (!body.binary && body.localPath) {
+					if (!body.binary && body.localPath && (await this.session.getConnection()).access !== "viewer") {
 						this.followDisk(model, URI.file(body.localPath), async () => (await this.read<{ text: string }>(target.view.reviewId, "/file", { ...reviewSourceQuery(target.view), side: target.side, file: target.file })).text);
 					}
 					return model;

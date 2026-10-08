@@ -5,12 +5,14 @@
 
 import { Emitter,Event } from "../../base/common/event.js";
 import { Disposable } from "../../base/common/lifecycle.js";
+import { generateUuid } from "../../base/common/uuid.js";
 import { createDecorator } from "../../platform/instantiation/common/instantiation.js";
 import { IMainProcessService } from "../../platform/ipc/common/mainProcessService.js";
 import { IStorageService,StorageScope,StorageTarget } from "../../platform/storage/common/storage.js";
 import {
 REVIEW_DESKTOP_CHANNEL,
 REVIEW_DESKTOP_CONNECTION_VERSION,
+REVIEW_EXTERNAL_SERVER_REJECTED,
 type ReviewDesktopConnection,
 } from "../common/reviewDesktopBootstrap.js";
 import { consumeReviewEventStream } from "../common/reviewEventStream.js";
@@ -41,6 +43,8 @@ export interface ReviewServerConnection {
 	readonly token: string;
 	/** The launch's id, minted by the main process; canvas telemetry carries it. */
 	readonly appSessionId: string;
+	/** "viewer" when this Desktop reads another machine's server and must not write. */
+	readonly access: "full" | "viewer";
 }
 
 
@@ -104,6 +108,12 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 	private controlAttached = false;
 	private controlDispatch: ((value: JsonValue) => Promise<ReviewVerbResponse>) | undefined;
 	/**
+	 * Names this window's control stream on every reconnect, so a viewer's
+	 * reconnect can take over its own slot from a stream the server has not yet
+	 * noticed is dead, without evicting another window of the same app.
+	 */
+	private readonly controlId = generateUuid();
+	/**
 	 * The main process owns the embedded server's endpoint and credentials and
 	 * publishes them only once it has validated the server's ready event.
 	 */
@@ -154,8 +164,8 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 
 	async getConnection(): Promise<ReviewServerConnection> {
 		await this.initialize();
-		const { token, appSessionId } = this.requireConnection();
-		return { serverUrl: this.serverUrl, token, appSessionId };
+		const { token, appSessionId, access } = this.requireConnection();
+		return { serverUrl: this.serverUrl, token, appSessionId, access: access ?? "full" };
 	}
 
 	async closeSourceWindows(reviewIds: readonly string[]): Promise<void> {
@@ -264,6 +274,8 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 	}
 
 	prepareTutorial(): Promise<void> {
+		// The tutorial is the server machine's to prepare.
+		if (this.connection?.access === "viewer") return Promise.resolve();
 		if (this.storageService.getBoolean(REVIEW_TUTORIAL_AUTOPREPARE_SUPPRESSED_KEY, StorageScope.APPLICATION, false)) {
 			return Promise.resolve();
 		}
@@ -283,6 +295,7 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 
 	private async requestTutorialPreparation(): Promise<void> {
 		await this.initialize();
+		if (this.requireConnection().access === "viewer") return;
 		const response = await fetch(`${this.serverUrl}/tutorial/prepare`, {
 			method: "POST",
 			headers: this.authHeaders(),
@@ -465,7 +478,17 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 		await reconnectUntilAborted(
 			this.controller.signal,
 			async () => {
-				await this.initialize();
+				try {
+					await this.initialize();
+				} catch (error) {
+					// The other machine's server refused this Desktop; asking main
+					// again would only probe it again.
+					if (error instanceof Error && error.name === REVIEW_EXTERNAL_SERVER_REJECTED) {
+						console.error("[Whiteboard] control channel off: the server refused this Desktop", error);
+						return;
+					}
+					throw error;
+				}
 				await this.maintainControl(dispatch);
 			},
 			{
@@ -488,7 +511,7 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 			}
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
-		throw new Error("The embedded Whiteboard server did not become healthy.");
+		throw new Error("The Whiteboard server did not become healthy.");
 	}
 
 
@@ -514,7 +537,13 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 	): Promise<void> {
 		const url = new URL("/control", this.serverUrl);
 		url.searchParams.set("token", this.token);
-		const response = await fetch(url, { signal: this.controller.signal });
+		const response = await fetch(url, {
+			headers: {
+				"x-review-app-session-id": this.requireConnection().appSessionId,
+				"x-review-control-id": this.controlId,
+			},
+			signal: this.controller.signal,
+		});
 		if (!response.ok || !response.body) {
 			throw new Error(`Desktop control returned ${response.status}.`);
 		}
@@ -533,6 +562,8 @@ export class ReviewDesktopConnectionService extends Disposable implements IRevie
 						error: error instanceof Error ? error.message : String(error),
 					};
 				}
+				// The server never waits on a viewer, and refuses its writes.
+				if (this.requireConnection().access === "viewer") return;
 				await fetch(`${this.serverUrl}/control/result`, {
 					method: "POST",
 					headers: {

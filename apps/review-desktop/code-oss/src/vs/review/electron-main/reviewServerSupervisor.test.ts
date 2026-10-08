@@ -284,3 +284,103 @@ for (const exitsOnShutdown of [true, false]) {
 		assert.equal(killed, true);
 	});
 }
+
+test('the first server listens on the configured port and receives the viewer token', async (t) => {
+	const processes: FakeServerProcess[] = [];
+	let seen: NodeJS.ProcessEnv | undefined;
+	const supervisor = new ReviewServerSupervisor({
+		appRoot: '/app',
+		appVersion: '0.0.34',
+		isBuilt: true,
+		channel: 'stable',
+		logInfo: () => { },
+		logError: () => { },
+		resolveEnvironment: async () => ({ WHITEBOARD_SERVER_PORT: '47100' }),
+		resolveServerSettings: (environment) => {
+			seen = environment;
+			return { port: 47100, viewerToken: 'viewer-secret' };
+		},
+		createProcess: () => {
+			const serverProcess = new FakeServerProcess();
+			processes.push(serverProcess);
+			return serverProcess;
+		},
+	});
+	t.after(() => supervisor.dispose());
+
+	supervisor.start();
+	await new Promise((resolve) => setImmediate(resolve));
+
+	assert.equal(seen?.WHITEBOARD_SERVER_PORT, '47100');
+	assert.equal(processes[0].env.DEV_FAST_REVIEW_SERVER_PORT, '47100');
+	assert.equal(processes[0].env.DEV_FAST_REVIEW_VIEWER_TOKEN, 'viewer-secret');
+});
+
+test('a bad server setting fails startup with its message instead of starting a server', async (t) => {
+	let created = 0;
+	const supervisor = new ReviewServerSupervisor({
+		appRoot: '/app',
+		appVersion: '0.0.34',
+		isBuilt: true,
+		channel: 'stable',
+		logInfo: () => { },
+		logError: () => { },
+		resolveServerSettings: () => {
+			throw new Error('review.server.port must be a port between 0 and 65535, got 70000.');
+		},
+		createProcess: () => {
+			created += 1;
+			return new FakeServerProcess();
+		},
+	});
+	t.after(() => supervisor.dispose());
+
+	supervisor.start();
+
+	await assert.rejects(supervisor.whenConnected(), /review\.server\.port.*70000/);
+	assert.equal(created, 0);
+});
+
+test('no viewer token reaches the server unless one is configured', () => {
+	const environment = createReviewServerEnvironment({
+		applicationEnvironment: { DEV_FAST_REVIEW_VIEWER_TOKEN: 'inherited' },
+		resolvedEnvironment: {},
+		appVersion: '0.0.34',
+		serverEntry: '/review/server.js',
+		port: 0,
+		token: 'token',
+		instanceId: 'instance',
+		appPid: 1234,
+		telemetryEnabled: true,
+		appSessionId: 'session',
+		channel: 'stable',
+	});
+
+	assert.equal(environment.DEV_FAST_REVIEW_VIEWER_TOKEN, undefined);
+});
+
+test('a bad server setting keeps failing on later start attempts', async (t) => {
+	let created = 0;
+	const supervisor = new ReviewServerSupervisor({
+		appRoot: '/app',
+		appVersion: '0.0.34',
+		isBuilt: true,
+		channel: 'stable',
+		logInfo: () => { },
+		logError: () => { },
+		resolveServerSettings: () => {
+			throw new Error('review.server.port must be a port between 0 and 65535, got 70000.');
+		},
+		createProcess: () => {
+			created += 1;
+			return new FakeServerProcess();
+		},
+	});
+	t.after(() => supervisor.dispose());
+
+	supervisor.start();
+	await assert.rejects(supervisor.whenConnected(), /review\.server\.port.*70000/);
+	supervisor.start();
+
+	assert.equal(created, 0);
+});

@@ -174,6 +174,8 @@ export function ReviewDiffView({
 
   const lenses = useReviewLenses();
   const diffFiles = useReviewDiffFiles();
+  // Viewed marks are a write: a read-only connection sees them, never sets them.
+  const readOnly = useReviewSession().readOnly === true;
   const lens = scope ? undefined : lenses?.active;
   const [lensList, setLensList] = useState<HTMLDivElement | null>(null);
   const rows = useLensRows(lenses?.lenses ?? []);
@@ -432,7 +434,10 @@ export function ReviewDiffView({
                     <ViewedButton
                       progress={stats}
                       disabled={
-                        lenses.busy || !!item.unavailable || !!item.pending
+                        readOnly ||
+                        lenses.busy ||
+                        !!item.unavailable ||
+                        !!item.pending
                       }
                       label={item.title}
                       onClick={() =>
@@ -523,8 +528,14 @@ export function ReviewDiffView({
           <NativeDiffView
             treeContainer={fullTree}
             progress={fullProgress}
-            onToggleViewed={(path) => markFile(path, false)}
-            onSetViewed={(ranges, viewed) => lenses.mark(ranges, viewed)}
+            onToggleViewed={
+              readOnly ? undefined : (path) => markFile(path, false)
+            }
+            onSetViewed={
+              readOnly
+                ? undefined
+                : (ranges, viewed) => lenses.mark(ranges, viewed)
+            }
             hidden={!!lens}
             inWorkspace
           />
@@ -534,8 +545,14 @@ export function ReviewDiffView({
             lens={lens}
             treeContainer={lensTree}
             progress={lensProgress}
-            onToggleViewed={(path) => markFile(path, true)}
-            onSetViewed={(ranges, viewed) => lenses.mark(ranges, viewed)}
+            onToggleViewed={
+              readOnly ? undefined : (path) => markFile(path, true)
+            }
+            onSetViewed={
+              readOnly
+                ? undefined
+                : (ranges, viewed) => lenses.mark(ranges, viewed)
+            }
             inWorkspace
           />
         )}

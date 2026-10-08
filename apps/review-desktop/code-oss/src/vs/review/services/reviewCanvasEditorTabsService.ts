@@ -197,6 +197,8 @@ export class ReviewCanvasEditorTabsService extends Disposable implements IReview
 	 */
 	private async finishCliInstallUpdate(): Promise<void> {
 		try {
+			// The install belongs to the server machine; a viewer's Welcome shows none.
+			if ((await this.desktopConnection.getConnection()).access === "viewer") return;
 			const status = await this.desktopConnection.getCliInstallStatus();
 			if (status.updateNeeded) await this.desktopConnection.finishCliInstallUpdate();
 		} catch (error) {

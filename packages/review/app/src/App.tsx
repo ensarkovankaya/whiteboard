@@ -295,6 +295,8 @@ function ReviewLayoutContent({
   // The scratchpad is a document and nothing else: no source tree to browse,
   // nothing to share, nothing to dismiss.
   const scratchpad = session.review?.kind === "scratchpad";
+  // A viewer reads another machine's review: no source tree, no dismissal.
+  const viewOnly = scratchpad || session.readOnly === true;
   useEffect(() => {
     if (scratchpad) captureUiEvent(session, "scratchpad_opened");
   }, [scratchpad, session]);
@@ -607,7 +609,7 @@ function ReviewLayoutContent({
                   shellStyles.topbarContext,
                 )}
               >
-                {!scratchpad && (
+                {!viewOnly && (
                   <Button
                     variant="ghost"
                     xstyle={shellStyles.openSourceTree}
@@ -659,10 +661,10 @@ function ReviewLayoutContent({
               >
                 <DiscordIcon xstyle={controlStyles.chromeIcon} />
               </IconButton>
-              <BugReportControl />
+              {session.readOnly !== true && <BugReportControl />}
               <ReviewBatonChip outcome={review.submissionOutcome} />
               <DiffLayoutControl />
-              {!scratchpad &&
+              {!viewOnly &&
                 !review.historicalRevision &&
                 !review.submissionOutcome && (
                   <div
@@ -672,7 +674,7 @@ function ReviewLayoutContent({
                     )}
                   />
                 )}
-              {!scratchpad &&
+              {!viewOnly &&
               !review.historicalRevision &&
               !review.submissionOutcome ? (
                 <ReviewCornerAction />
@@ -727,10 +729,12 @@ function ReviewLayoutContent({
                     <document.render />
                   </ReviewDocumentBoundary>
                 </article>
-                <AskThreadMarks
-                  articleRef={articleRef}
-                  revision={documentRevision}
-                />
+                {session.readOnly !== true && (
+                  <AskThreadMarks
+                    articleRef={articleRef}
+                    revision={documentRevision}
+                  />
+                )}
               </>
             </div>
             {softwareMapEnabled && activeView === "map" && (

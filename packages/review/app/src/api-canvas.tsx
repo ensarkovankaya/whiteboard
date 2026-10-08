@@ -282,8 +282,10 @@ export function ApiCanvas({
       [...(dataRef.current?.maps.values() ?? [])].find((map) => map === model)
         ?.pinnedData;
 
+    session.readOnly = content.readOnly === true;
+
     return session;
-  }, [content.bridge, content.reviewId, nativeSources]);
+  }, [content.bridge, content.reviewId, content.readOnly, nativeSources]);
 
   const session = useMemo(() => {
     if (!data) return baseSession;
@@ -327,7 +329,10 @@ export function ApiCanvas({
 
   // Only the latest version of a review this machine owns takes edits.
   const editable =
-    version === undefined && data !== undefined && !data.snapshot.shared;
+    version === undefined &&
+    data !== undefined &&
+    !data.snapshot.shared &&
+    content.readOnly !== true;
 
   const saveMarkdown = useMemo(
     () =>
@@ -360,7 +365,7 @@ export function ApiCanvas({
 
   const sharing = useMemo(
     () =>
-      data
+      data && content.readOnly !== true
         ? {
             client,
             reviewId: content.reviewId,
@@ -368,7 +373,7 @@ export function ApiCanvas({
             sender: data.snapshot.shared?.login,
           }
         : null,
-    [client, content.reviewId, data],
+    [client, content.reviewId, content.readOnly, data],
   );
 
   // Loads are near-instant, so stay blank until there is data or an error.

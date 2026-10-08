@@ -3,8 +3,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { parseReviewAgentTraceResponse } from "@dev.fast/review-protocol";
+import {
+  REVIEW_CLIENT_HEADER,
+  REVIEW_CLIENT_REMOTE,
+  parseReviewAgentTraceResponse,
+} from "@dev.fast/review-protocol";
 import { clearTraceEnvCache, writeStoreAuth } from "@dev.fast/trace-core";
+import type { ReviewAccessVariables } from "@review/server/hono-http.js";
+import { Hono } from "hono";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { createReviewApi } from "./http.js";
@@ -177,4 +183,121 @@ it("distinguishes a missing transcript from invalid storage configuration", asyn
   clearTraceEnvCache();
   const invalid = await api.request(`/${id}/agent-traces/${session}`);
   expect(invalid.status).toBe(400);
+});
+
+/** The API as the token check hands it a viewer's request. */
+function asViewer(reviewApi: typeof api) {
+  return new Hono<{ Variables: ReviewAccessVariables }>()
+    .use("*", async (context, next) => {
+      context.set("access", "viewer");
+      await next();
+    })
+    .route("/", reviewApi);
+}
+
+it("lets a viewer read only the traces this machine already saved, never the store", async () => {
+  const viewer = asViewer(api);
+
+  expect(await (await viewer.request(`/${id}/agent-traces`)).json()).toEqual(
+    expect.objectContaining({
+      ok: true,
+      sources: [],
+      sessions: [
+        expect.objectContaining({ sessionId: session, available: false }),
+      ],
+    }),
+  );
+  expect((await viewer.request(`/${id}/agent-traces/${session}`)).status).toBe(
+    404,
+  );
+
+  // The full token downloads it; the viewer then reads the saved copy.
+  expect((await api.request(`/${id}/agent-traces/${session}`)).status).toBe(
+    200,
+  );
+  expect(
+    await (await viewer.request(`/${id}/agent-traces`)).json(),
+  ).toMatchObject({ sessions: [{ sessionId: session, available: true }] });
+
+  const detail = await viewer.request(`/${id}/agent-traces/${session}`);
+
+  expect(detail.status).toBe(200);
+  expect(parseReviewAgentTraceResponse(await detail.json())).toMatchObject({
+    ok: true,
+    events: [{ kind: "user", text: "Recover my stored trace" }],
+  });
+});
+
+it("asks no trace store for a viewer, whichever store it names", async () => {
+  vi.stubEnv("TRACE_R2_MODE", "");
+  mkdirSync(path.join(root, "trace"), { recursive: true });
+  writeFileSync(
+    path.join(root, "trace/config.json"),
+    JSON.stringify({ version: 2, "current-store": "hosted" }),
+  );
+  await writeStoreAuth(
+    {
+      origin: "https://app.dev.fast",
+      token: "test",
+      login: "test",
+      savedAt: "2026-09-16T00:00:00Z",
+    },
+    process.env,
+  );
+  clearTraceEnvCache();
+
+  const store = vi.fn<typeof fetch>(async () =>
+    Response.json(
+      { error: { code: "forbidden", message: "No" } },
+      { status: 403 },
+    ),
+  );
+
+  vi.stubGlobal("fetch", store);
+  const viewer = asViewer(api);
+
+  for (const storage of ["hosted", "s3"]) {
+    const listed = await viewer.request(
+      `/${id}/agent-traces?storage=${storage}`,
+    );
+
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).not.toHaveProperty("storageError");
+    expect(
+      (
+        await viewer.request(
+          `/${id}/agent-traces/${session}?storage=${storage}`,
+        )
+      ).status,
+    ).toBe(404);
+  }
+
+  expect(store).not.toHaveBeenCalled();
+
+  // The full token does ask it.
+  await api.request(`/${id}/agent-traces?storage=hosted`);
+  expect(store).toHaveBeenCalled();
+});
+
+it("tells a remote caller its trace configuration is invalid without naming where it is", async () => {
+  mkdirSync(path.join(root, "trace"), { recursive: true });
+  writeFileSync(path.join(root, "trace/config.json"), "invalid json");
+  clearTraceEnvCache();
+  const gateway = { [REVIEW_CLIENT_HEADER]: REVIEW_CLIENT_REMOTE };
+
+  const local = await (await api.request(`/${id}/agent-traces`)).json();
+
+  expect(local.storageError).toContain(root);
+
+  for (const response of [
+    await asViewer(api).request(`/${id}/agent-traces`),
+    await api.request(`/${id}/agent-traces`, { headers: gateway }),
+    await api.request(`/${id}/agent-traces/${session}`, { headers: gateway }),
+  ]) {
+    const body = await response.json();
+    const message = body.storageError ?? body.error;
+
+    expect(message).toEqual(expect.any(String));
+    expect(message).not.toContain(root);
+  }
 });

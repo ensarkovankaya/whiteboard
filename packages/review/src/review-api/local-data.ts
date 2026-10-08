@@ -586,11 +586,14 @@ export class LocalReviewData {
     pins,
     signal,
     file,
+    summaries,
   }: {
     reviewId: string;
     pins: Pins;
     signal: AbortSignal;
     file?: string;
+    /** False for a read-only viewer: no LLM summaries on this machine's keys. */
+    summaries?: boolean;
   }): AsyncGenerator<StructuralDiffEvent> {
     if (file !== undefined) checkRelativePath(file);
 
@@ -606,6 +609,7 @@ export class LocalReviewData {
         },
         paths: file === undefined ? undefined : [file],
         signal,
+        summaries,
       });
 
       return;
@@ -630,6 +634,7 @@ export class LocalReviewData {
       comparison: { kind: "trees", base: pins.base, head: pins.head },
       paths: file === undefined ? undefined : [file],
       signal,
+      summaries,
     });
   }
 
@@ -1259,6 +1264,19 @@ export class LocalReviewData {
     return { file, side, commit, text };
   }
 
+  /** Whether a live checkout's file is one its review shows: tracked, or among its changes. */
+  async showsWorkingFile(pins: Pins, file: string): Promise<boolean> {
+    const vcs = await this.vcs(pins.repositoryId);
+
+    if (!vcs) return false;
+
+    if ((await workingFiles(vcs)).includes(file)) return true;
+
+    return (await this.changes(pins)).some(
+      (change) => change.path === file || change.previousPath === file,
+    );
+  }
+
   async tree(
     pins: Pins,
     side: "base" | "head",
@@ -1388,7 +1406,12 @@ export class LocalReviewData {
   }
 
   /** Start shared coverage work without occupying an HTTP request until it completes. */
-  coveragePending(reviewId: string, pins: Pins, mode: CoverageMode): boolean {
+  coveragePending(
+    reviewId: string,
+    pins: Pins,
+    mode: CoverageMode,
+    summaries = true,
+  ): boolean {
     const key = JSON.stringify([pins, mode]);
     const existing = this.coverageCache.get(key);
 
@@ -1397,13 +1420,18 @@ export class LocalReviewData {
       throw existing.error;
     }
 
-    void this.coverage(reviewId, pins, mode).catch(() => {});
+    void this.coverage(reviewId, pins, mode, summaries).catch(() => {});
 
     return this.coverageCache.get(key)!.state === "pending";
   }
 
-  coverageSnapshot(reviewId: string, pins: Pins, mode: CoverageMode) {
-    const pending = this.coveragePending(reviewId, pins, mode);
+  coverageSnapshot(
+    reviewId: string,
+    pins: Pins,
+    mode: CoverageMode,
+    summaries = true,
+  ) {
+    const pending = this.coveragePending(reviewId, pins, mode, summaries);
     const entry = this.coverageCache.get(JSON.stringify([pins, mode]))!;
 
     return {
@@ -1427,7 +1455,8 @@ export class LocalReviewData {
     }, 50);
   }
 
-  coverage(reviewId: string, pins: Pins, mode: CoverageMode) {
+  /** `summaries` false (a viewer's read) computes coverage without LLM summaries. */
+  coverage(reviewId: string, pins: Pins, mode: CoverageMode, summaries = true) {
     const key = JSON.stringify([pins, mode]);
     let entry = this.coverageCache.get(key);
 
@@ -1444,6 +1473,7 @@ export class LocalReviewData {
           if (current) current.partial = partial;
           this.notifyCoverage();
         },
+        summaries,
       );
 
       entry = { promise, state: "pending" };

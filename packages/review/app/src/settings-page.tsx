@@ -118,6 +118,8 @@ export function SettingsPage({
       ? { ...settings.install, status: installStatus }
       : settings.install;
 
+  const saveScratchpad = settings.setScratchpadEnabled;
+
   const run = async <T,>(
     key: string,
     action: () => Promise<T>,
@@ -359,7 +361,7 @@ export function SettingsPage({
                 />
               </label>
             </Row>
-            {structuralDiffEnabled ? (
+            {structuralDiffEnabled && settings.diffrConfig ? (
               <DiffrConfigSection
                 actions={settings.diffrConfig}
                 reloadWindow={settings.reloadWindow}
@@ -387,28 +389,31 @@ export function SettingsPage({
                 />
               </label>
             </Row>
-            <Row
-              label="Scratchpad"
-              description="Show the experimental scratchpad on Home. Agents draw on it through Whiteboard's MCP tools."
-            >
-              <label {...stylex.props(styles.toggle)}>
-                <input
-                  {...stylex.props(styles.checkbox)}
-                  type="checkbox"
-                  aria-label="Scratchpad"
-                  checked={scratchpadEnabled}
-                  disabled={busy !== null}
-                  onChange={(event) => {
-                    const enabled = event.target.checked;
-                    void run(
-                      "scratchpad",
-                      () => settings.setScratchpadEnabled(enabled),
-                      setScratchpadEnabled,
-                    );
-                  }}
-                />
-              </label>
-            </Row>
+            {/* Absent for a read-only connection: the server machine owns it. */}
+            {saveScratchpad ? (
+              <Row
+                label="Scratchpad"
+                description="Show the experimental scratchpad on Home. Agents draw on it through Whiteboard's MCP tools."
+              >
+                <label {...stylex.props(styles.toggle)}>
+                  <input
+                    {...stylex.props(styles.checkbox)}
+                    type="checkbox"
+                    aria-label="Scratchpad"
+                    checked={scratchpadEnabled}
+                    disabled={busy !== null}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      void run(
+                        "scratchpad",
+                        () => saveScratchpad(enabled),
+                        setScratchpadEnabled,
+                      );
+                    }}
+                  />
+                </label>
+              </Row>
+            ) : null}
             {install ? (
               <TraceCaptureSection
                 install={install}

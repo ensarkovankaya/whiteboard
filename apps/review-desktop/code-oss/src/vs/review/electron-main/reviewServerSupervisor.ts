@@ -21,6 +21,7 @@ import {
   type ReviewServerAnnouncement,
   resolveReviewServerEntry,
 } from "../common/reviewDesktopBootstrap.js";
+import type { ReviewServerSettings } from "../common/reviewServerSettings.js";
 import {
   REVIEW_SERVER_RESTART_DELAYS,
   REVIEW_SERVER_STARTUP_TIMEOUT_MS,
@@ -86,6 +87,10 @@ export interface ReviewServerSupervisorOptions {
   readonly onServerTerminated?: (detail: ReviewServerTermination) => void;
   /** Called every time a server, first or restarted, announces its endpoint. */
   readonly onServerReady?: () => void;
+  /** Port and viewer token, read once against the login-shell environment; may throw. */
+  readonly resolveServerSettings?: (
+    environment: NodeJS.ProcessEnv,
+  ) => Pick<ReviewServerSettings, "port" | "viewerToken">;
 }
 
 export function createReviewServerEnvironment(options: {
@@ -97,6 +102,7 @@ export function createReviewServerEnvironment(options: {
   readonly serverEntry: string;
   readonly port: number;
   readonly token: string;
+  readonly viewerToken?: string;
   readonly instanceId: string;
   readonly appPid: number;
   readonly telemetryEnabled: boolean;
@@ -111,6 +117,7 @@ export function createReviewServerEnvironment(options: {
     DEV_FAST_REVIEW_SERVER_ENTRY: options.serverEntry,
     DEV_FAST_REVIEW_SERVER_PORT: String(options.port),
     DEV_FAST_REVIEW_SERVER_TOKEN: options.token,
+    DEV_FAST_REVIEW_VIEWER_TOKEN: options.viewerToken,
     DEV_FAST_REVIEW_INSTANCE_ID: options.instanceId,
     DEV_FAST_REVIEW_APP_PID: String(options.appPid),
     DEV_FAST_REVIEW_APP_VERSION: options.appVersion,
@@ -222,6 +229,8 @@ export class ReviewServerSupervisor extends Disposable {
   private readonly token = randomBytes(32).toString("base64url");
   private readonly instanceId = randomUUID();
   private port = 0;
+  private viewerToken: string | undefined;
+  private serverSettingsApplied = false;
 
   /**
    * One id per app launch. A restarted server inherits it, so the sessions it
@@ -295,6 +304,12 @@ export class ReviewServerSupervisor extends Disposable {
     resolvedEnvironment: NodeJS.ProcessEnv,
   ): void {
     if (this.stopping) return;
+    try {
+      this.applyServerSettings({ ...process.env, ...resolvedEnvironment });
+    } catch (error) {
+      this.failStartup(error);
+      return;
+    }
     const serverEntry = resolveReviewServerEntry({
       isBuilt: this.options.isBuilt,
       appRoot: this.options.appRoot,
@@ -404,6 +419,7 @@ export class ReviewServerSupervisor extends Disposable {
       serverEntry,
       port: this.port,
       token: this.token,
+      viewerToken: this.viewerToken,
       instanceId: this.instanceId,
       appPid,
       telemetryEnabled: this.telemetryEnabled,
@@ -424,6 +440,18 @@ export class ReviewServerSupervisor extends Disposable {
       return;
     }
     if (!this.connected.isSettled) this.armReadyTimeout();
+  }
+
+  /** The first start pins the configured port; restarts keep whatever was bound. */
+  private applyServerSettings(environment: NodeJS.ProcessEnv): void {
+    if (this.serverSettingsApplied) return;
+    // Marked applied only after a successful resolve, so a retry after an
+    // invalid setting resolves (and fails) again instead of starting unpinned.
+    const settings = this.options.resolveServerSettings?.(environment);
+    this.serverSettingsApplied = true;
+    if (!settings) return;
+    this.port = settings.port;
+    this.viewerToken = settings.viewerToken;
   }
 
   private armReadyTimeout(): void {

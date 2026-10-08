@@ -22,6 +22,8 @@ export function captureUiEvent(
   properties?: UiTelemetryProperties,
   error?: PackedClientError,
 ): void {
+  // A viewer sends no telemetry.
+  if (session.readOnly === true) return;
   const sanitizedProperties = sanitizeEventProperties(name, properties);
 
   if (!sanitizedProperties) return;

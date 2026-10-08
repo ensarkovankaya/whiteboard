@@ -28,6 +28,8 @@ export function useReviewTabTelemetry(activeView: ReviewView): void {
   const send = useEffectEvent<
     Parameters<typeof createReviewTabDwellTracker>[0]["send"]
   >((payload, options) => {
+    // A viewer sends no telemetry.
+    if (session.readOnly === true) return;
     createReviewTabTelemetryTransport({
       endpoint: session.beaconUrl("/telemetry/tab"),
       navigator: window.navigator,

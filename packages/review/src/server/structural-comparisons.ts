@@ -21,6 +21,8 @@ export class StructuralComparisons {
       input.repositoryPath,
       input.comparison,
       input.paths,
+      // A viewer's run has no summaries; it never stands in for one that does.
+      input.summaries !== false,
     ]);
 
     let entry = this.entries.get(key);

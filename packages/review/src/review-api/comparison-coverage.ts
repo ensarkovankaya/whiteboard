@@ -42,6 +42,7 @@ export async function comparisonCoverage(
   mode: CoverageMode,
   signal: AbortSignal,
   publish?: (coverage: ComparisonCoverage) => void,
+  summaries = true,
 ) {
   const fileSources = new Map<string, FileLineRange[]>();
   const alignments = new Map<string, readonly AlignmentRow[]>();
@@ -144,6 +145,7 @@ export async function comparisonCoverage(
       reviewId,
       pins,
       signal,
+      summaries,
     })) {
       if (event.type === "start") {
         for (const entry of event.files)

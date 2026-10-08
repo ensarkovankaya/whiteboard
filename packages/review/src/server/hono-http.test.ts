@@ -5,7 +5,33 @@ import {
   isAuthorizedRequest,
   jsonResponse,
   readBoundedRequestJson,
+  viewerTokenFrom,
 } from "./hono-http";
+
+describe("the viewer token setting", () => {
+  const strong = "v".repeat(32);
+
+  it("turns viewer access on only for a token of at least 32 characters", () => {
+    const warnings: string[] = [];
+    const warn = (line: string) => warnings.push(line);
+
+    expect(viewerTokenFrom(undefined, warn)).toBeUndefined();
+    expect(viewerTokenFrom("   ", warn)).toBeUndefined();
+    expect(warnings).toEqual([]);
+
+    expect(viewerTokenFrom(`  ${strong}\n`, warn)).toBe(strong);
+    expect(warnings).toEqual([]);
+
+    const weak = "w".repeat(31);
+
+    expect(viewerTokenFrom(` ${weak} `, warn)).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("32");
+    expect(warnings[0]).not.toContain(weak);
+    expect(warnings[0]!.endsWith("\n")).toBe(true);
+    expect(warnings[0]!.trimEnd()).not.toContain("\n");
+  });
+});
 
 describe("Hono HTTP adapter", () => {
   it("preserves newline JSON, CORS, and timing-safe token inputs", async () => {

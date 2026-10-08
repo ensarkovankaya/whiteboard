@@ -35,6 +35,11 @@ export const REVIEW_READY_NOTIFICATION_CHOICES = ['notificationAndBadge', 'notif
 export const REVIEW_DOCUMENT_WIDTH_SETTING = 'review.documentWidth';
 export const REVIEW_DOCUMENT_WIDTH_CHOICES = ['standard', 'wide', 'full'] as const;
 export const EDITOR_FONT_SIZE_SETTING = 'editor.fontSize';
+export const REVIEW_SERVER_MODE_SETTING = 'review.server.mode';
+export const REVIEW_SERVER_MODES = ['embedded', 'external'] as const;
+export const REVIEW_SERVER_HOST_SETTING = 'review.server.host';
+export const REVIEW_SERVER_PORT_SETTING = 'review.server.port';
+export const REVIEW_SERVER_VIEWER_TOKEN_SETTING = 'review.server.viewerToken';
 
 export const reviewConfigurationDefaults = {
 	[REVIEW_SOFTWARE_MAP_SETTING]: false,

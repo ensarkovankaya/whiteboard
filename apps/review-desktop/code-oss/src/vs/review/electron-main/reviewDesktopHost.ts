@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { app, BrowserWindow } from "electron";
-import { Disposable, toDisposable } from "../../base/common/lifecycle.js";
+import { Disposable, type IDisposable, toDisposable } from "../../base/common/lifecycle.js";
 import { join } from "../../base/common/path.js";
 import { IConfigurationService } from "../../platform/configuration/common/configuration.js";
 import { IEnvironmentMainService } from "../../platform/environment/electron-main/environmentMainService.js";
@@ -17,16 +17,37 @@ import { NullTelemetryService } from "../../platform/telemetry/common/telemetryU
 import { IUpdateService } from "../../platform/update/common/update.js";
 import { UtilityProcess } from "../../platform/utilityProcess/electron-main/utilityProcess.js";
 import type { ReviewDesktopConnection } from "../common/reviewDesktopBootstrap.js";
-import { REVIEW_TELEMETRY_SETTING } from "../common/reviewConfigurationDefaults.js";
+import {
+  REVIEW_SERVER_HOST_SETTING,
+  REVIEW_SERVER_MODE_SETTING,
+  REVIEW_SERVER_PORT_SETTING,
+  REVIEW_SERVER_VIEWER_TOKEN_SETTING,
+  REVIEW_TELEMETRY_SETTING,
+} from "../common/reviewConfigurationDefaults.js";
+import {
+  resolveReviewServerSettings,
+  reviewExternalServerOrigin,
+} from "../common/reviewServerSettings.js";
 import { REVIEW_CRASH_DUMPS_DIRNAME } from "../node/reviewCrashReporter.js";
 import { ReviewCrashDumps } from "./reviewCrashDumps.js";
 import { ReviewCrashTelemetry } from "./reviewCrashTelemetry.js";
 import { ReviewMainErrorTelemetry } from "./reviewMainErrorTelemetry.js";
+import { ReviewExternalServerConnection } from "./reviewExternalServerConnection.js";
 import { ReviewServerSupervisor } from "./reviewServerSupervisor.js";
 import {
   darwinShipItLogPath,
   ReviewUpdateTelemetry,
 } from "./reviewUpdateTelemetry.js";
+
+/** What the host needs from its server, whether it runs it or only reads one. */
+interface ReviewServerEndpoint extends IDisposable {
+  readonly appSessionId: string;
+  whenConnected(): Promise<ReviewDesktopConnection>;
+  stageRustAnalyzer(): void;
+  setTelemetryEnabled(enabled: boolean): void;
+  start(): void;
+  stop(): Promise<void>;
+}
 
 /**
  * Binds the embedded Review server's lifetime to the application's. All of the
@@ -34,7 +55,7 @@ import {
  * dependency so it stays testable; this class only supplies the platform.
  */
 export class ReviewDesktopHost extends Disposable {
-  private readonly supervisor: ReviewServerSupervisor;
+  private readonly endpoint: ReviewServerEndpoint;
   private terminating = false;
 
   private readonly onTerminationSignal = () => {
@@ -64,69 +85,104 @@ export class ReviewDesktopHost extends Disposable {
       this.environmentMainService.userDataPath,
       REVIEW_CRASH_DUMPS_DIRNAME,
     );
-    this.supervisor = this._register(
-      new ReviewServerSupervisor({
-        appRoot: this.environmentMainService.appRoot,
-        channel: !this.environmentMainService.isBuilt
-          ? "dev"
-          : this.productService.quality === "preview"
-            ? "preview"
-            : "stable",
-        isBuilt: this.environmentMainService.isBuilt,
-        userExtensionsPath: this.environmentMainService.extensionsPath,
-        appVersion:
-          this.productService.reviewVersion ?? this.productService.version,
-        appUrlProtocol: this.productService.urlProtocol,
-        releaseChannel: this.productService.quality,
-        serverEntryOverride: process.env["DEV_FAST_REVIEW_SERVER_ENTRY"],
-        resolveEnvironment: () =>
-          (resolvedEnvironment ??= getResolvedShellEnv(
-            this.configurationService,
-            this.logService,
-            this.environmentMainService.args,
-            process.env,
-          )),
-        logInfo: (message) => this.logService.info(message),
-        logError: (message) => this.logService.error(message),
-        createProcess: () =>
-          new UtilityProcess(
-            this.logService,
-            NullTelemetryService,
-            this.lifecycleMainService,
+    const resolveEnvironment = () =>
+      (resolvedEnvironment ??= getResolvedShellEnv(
+        this.configurationService,
+        this.logService,
+        this.environmentMainService.args,
+        process.env,
+      ));
+    const readServerSettings = (environment: NodeJS.ProcessEnv) =>
+      resolveReviewServerSettings(
+        {
+          mode: this.configurationService.getValue(REVIEW_SERVER_MODE_SETTING),
+          host: this.configurationService.getValue(REVIEW_SERVER_HOST_SETTING),
+          port: this.configurationService.getValue(REVIEW_SERVER_PORT_SETTING),
+          viewerToken: this.configurationService.getValue(
+            REVIEW_SERVER_VIEWER_TOKEN_SETTING,
           ),
-        telemetryEnabled:
-          this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
-          false,
-        crashDumpsDir,
-        onServerTerminated: (detail) => {
-          errorTelemetry?.serverLost();
-          crashTelemetry?.reportServerExit(detail);
         },
-        onServerReady: () => errorTelemetry?.serverReady(),
-      }),
+        environment,
+      );
+    // Read once: changing the mode takes a restart.
+    const external =
+      this.configurationService.getValue(REVIEW_SERVER_MODE_SETTING) ===
+      "external";
+    // A viewer reports nothing to another machine's server.
+    const telemetryAllowed = () =>
+      !external &&
+      this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
+        false;
+    const appVersion =
+      this.productService.reviewVersion ?? this.productService.version;
+    this.endpoint = this._register(
+      external
+        ? new ReviewExternalServerConnection({
+            appVersion,
+            resolveEndpoint: async () => {
+              const settings = readServerSettings({
+                ...process.env,
+                ...(await resolveEnvironment().catch(() => ({}))),
+              });
+              return {
+                origin: reviewExternalServerOrigin(
+                  settings.host,
+                  settings.port,
+                ),
+                viewerToken: settings.viewerToken,
+              };
+            },
+            logInfo: (message) => this.logService.info(message),
+            logError: (message) => this.logService.error(message),
+          })
+        : new ReviewServerSupervisor({
+            appRoot: this.environmentMainService.appRoot,
+            channel: !this.environmentMainService.isBuilt
+              ? "dev"
+              : this.productService.quality === "preview"
+                ? "preview"
+                : "stable",
+            isBuilt: this.environmentMainService.isBuilt,
+            userExtensionsPath: this.environmentMainService.extensionsPath,
+            appVersion,
+            appUrlProtocol: this.productService.urlProtocol,
+            releaseChannel: this.productService.quality,
+            serverEntryOverride: process.env["DEV_FAST_REVIEW_SERVER_ENTRY"],
+            resolveEnvironment,
+            resolveServerSettings: readServerSettings,
+            logInfo: (message) => this.logService.info(message),
+            logError: (message) => this.logService.error(message),
+            createProcess: () =>
+              new UtilityProcess(
+                this.logService,
+                NullTelemetryService,
+                this.lifecycleMainService,
+              ),
+            telemetryEnabled: telemetryAllowed(),
+            crashDumpsDir,
+            onServerTerminated: (detail) => {
+              errorTelemetry?.serverLost();
+              crashTelemetry?.reportServerExit(detail);
+            },
+            onServerReady: () => errorTelemetry?.serverReady(),
+          }),
     );
     this._register(
       this.configurationService.onDidChangeConfiguration((event) => {
         if (!event.affectsConfiguration(REVIEW_TELEMETRY_SETTING)) return;
-        this.supervisor.setTelemetryEnabled(
-          this.configurationService.getValue<boolean>(
-            REVIEW_TELEMETRY_SETTING,
-          ) !== false,
-        );
+        this.endpoint.setTelemetryEnabled(telemetryAllowed());
       }),
     );
     this._register(
       this.lifecycleMainService.onWillShutdown((event) => {
-        event.join("reviewDesktopHost", this.supervisor.stop());
+        event.join("reviewDesktopHost", this.endpoint.stop());
       }),
     );
     // Main-process errors report through the embedded server, so they pass the
     // same opt-out checks and the same redaction step as every other event.
     errorTelemetry = new ReviewMainErrorTelemetry({
       whenConnected: () => this.whenConnected(),
-      isTelemetryEnabled: () =>
-        this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
-        false,
+      isTelemetryEnabled: telemetryAllowed,
       userDataPath: this.environmentMainService.userDataPath,
       logError: (message) => this.logService.error(message),
     });
@@ -136,14 +192,11 @@ export class ReviewDesktopHost extends Disposable {
       dumpsDir: crashDumpsDir,
       launch: {
         startedAt: Date.now(),
-        appSessionId: this.supervisor.appSessionId,
-        appVersion:
-          this.productService.reviewVersion ?? this.productService.version,
+        appSessionId: this.endpoint.appSessionId,
+        appVersion,
       },
       whenConnected: () => this.whenConnected(),
-      isTelemetryEnabled: () =>
-        this.configurationService.getValue<boolean>(REVIEW_TELEMETRY_SETTING) !==
-        false,
+      isTelemetryEnabled: telemetryAllowed,
       logError: (message) => this.logService.error(message),
     });
     crashTelemetry = this._register(
@@ -163,10 +216,7 @@ export class ReviewDesktopHost extends Disposable {
         updateService: this.updateService,
         storageService: this.applicationStorageMainService,
         telemetry: mainTelemetry,
-        isTelemetryEnabled: () =>
-          this.configurationService.getValue<boolean>(
-            REVIEW_TELEMETRY_SETTING,
-          ) !== false,
+        isTelemetryEnabled: telemetryAllowed,
         shipItLogPath: this.productService.darwinBundleIdentifier
           ? darwinShipItLogPath(
               this.environmentMainService.userHome.fsPath,
@@ -178,7 +228,7 @@ export class ReviewDesktopHost extends Disposable {
     );
     process.once("SIGINT", this.onTerminationSignal);
     process.once("SIGTERM", this.onTerminationSignal);
-    this.supervisor.start();
+    this.endpoint.start();
   }
 
   /**
@@ -186,11 +236,11 @@ export class ReviewDesktopHost extends Disposable {
    * renderer awaits this instead of reading bootstrap environment variables.
    */
   whenConnected(): Promise<ReviewDesktopConnection> {
-    return this.supervisor.whenConnected();
+    return this.endpoint.whenConnected();
   }
 
   stageRustAnalyzer(): void {
-    this.supervisor.stageRustAnalyzer();
+    this.endpoint.stageRustAnalyzer();
   }
 
   override dispose(): void {

@@ -4,7 +4,10 @@ import { type JsonObject, isJsonObject } from "@dev.fast/json";
 import {
   REVIEW_CLIENT_HEADER,
   REVIEW_CLIENT_REMOTE,
+  type ReviewApiSummary,
   type ReviewStructuralDiffEvent,
+  type StructuralDiffEvent,
+  type StructuralProblem,
 } from "@dev.fast/review-protocol";
 import { errorMessage } from "@dev.fast/trace-core";
 import {
@@ -27,7 +30,11 @@ import type { AskThreads } from "@review/ask/threads.js";
 import { watchAskThreads } from "@review/ask/watch.js";
 import { fuzzyRank } from "@review/fuzzy-match.js";
 import { resolveReviewStackLayers } from "@review/review-stack.js";
-import { readBoundedRequestJson } from "@review/server/hono-http.js";
+import {
+  VIEWER_READ_ONLY,
+  ViewerReadOnlyError,
+  readBoundedRequestJson,
+} from "@review/server/hono-http.js";
 import { HttpJsonError } from "@review/server/http-json.js";
 import {
   type SharingHostEvents,
@@ -43,7 +50,13 @@ import { z } from "zod";
 import { anchorQuotes } from "./anchor-quotes.js";
 import { authoringTools } from "./authoring-tools.js";
 import { documentText } from "./document-text.js";
-import { ReviewInputError } from "./document.js";
+import {
+  type Pins,
+  ReviewInputError,
+  type SourcePins,
+  explicitPins,
+  sourceReferences,
+} from "./document.js";
 import {
   instructionsQuerySchema,
   renderInstructions,
@@ -155,9 +168,111 @@ export interface ReviewApiHooks {
   sharing?: SharingHostEvents;
 }
 
-/** A gateway forwarding from another machine; it gets no local paths. */
+/** A read-only viewer, as the token check recorded (hono-http.ts). */
+const viewerCaller = (context: Context) => context.get("access") === "viewer";
+
+/** A gateway forwarding from another machine, or a viewer on one; it gets no local paths. */
 const remoteCaller = (context: Context) =>
-  context.req.header(REVIEW_CLIENT_HEADER) === REVIEW_CLIENT_REMOTE;
+  context.req.header(REVIEW_CLIENT_HEADER) === REVIEW_CLIENT_REMOTE ||
+  viewerCaller(context);
+
+/** A catalog entry without the checkout's path on this machine. */
+const remoteSummary = (summary: ReviewApiSummary): ReviewApiSummary => {
+  const { repositoryPath: _path, repositoryGroup, ...rest } = summary;
+
+  return {
+    ...rest,
+    // A group without a GitHub remote is keyed by its Git directory; keep only its equality.
+    ...(repositoryGroup && {
+      repositoryGroup: repositoryGroup.key.startsWith("git:")
+        ? {
+            ...repositoryGroup,
+            key: `git:${createHash("sha256").update(repositoryGroup.key).digest("hex")}`,
+          }
+        : repositoryGroup,
+    }),
+  };
+};
+
+/**
+ * Provider failures may contain local paths/subprocess output: the server log
+ * gets the cause, the caller only its kind. Desktop routes this process's
+ * stderr to its main log.
+ */
+function loggedFailure(context: Context, error: Error): string {
+  console.error(
+    `[Review API] ${context.req.method} ${context.req.path} failed:`,
+    error,
+  );
+
+  return `Whiteboard operation failed (${failureKind(error)}). The server logged the cause; Whiteboard Desktop writes it to main.log in its logs folder.`;
+}
+
+/**
+ * A failure inside a streamed response, as the caller may read it: input
+ * errors as written; for a remote caller anything else only by kind, as
+ * `onError` answers it.
+ */
+function streamFailure(context: Context, error: Error): string {
+  if (
+    error instanceof ReviewInputError ||
+    error instanceof HttpJsonError ||
+    !remoteCaller(context)
+  )
+    return error.message;
+
+  return loggedFailure(context, error);
+}
+
+const REMOTE_DIFFR_PROBLEM =
+  "diffr could not finish this part of the comparison. The server logged the cause.";
+
+/**
+ * A diffr record as a remote caller may read it. diffr words each problem
+ * with its full cause chain, which names this machine's paths: the caller
+ * keeps the code, the server log the message.
+ */
+function remoteStructuralEvent(
+  context: Context,
+  event: StructuralDiffEvent,
+): StructuralDiffEvent {
+  const hidden = (problem: StructuralProblem): StructuralProblem => {
+    console.error(
+      `[Review API] ${context.req.method} ${context.req.path} diffr ${problem.code}: ${problem.message}`,
+    );
+
+    return { code: problem.code, message: REMOTE_DIFFR_PROBLEM };
+  };
+
+  switch (event.type) {
+    case "file":
+      if (event.error) return { ...event, error: hidden(event.error) };
+
+      if (event.diff.type === "text" && event.diff.stats.fallback)
+        return {
+          ...event,
+          diff: {
+            ...event.diff,
+            stats: {
+              ...event.diff.stats,
+              fallback: hidden(event.diff.stats.fallback),
+            },
+          },
+        };
+
+      return event;
+    case "complete":
+      return event.aborted
+        ? { ...event, aborted: hidden(event.aborted) }
+        : event;
+    default:
+      return event;
+  }
+}
+
+/** Reads a path segment named .git, whatever its case (case-insensitive disks). */
+const gitPath = (file: string) =>
+  file.split(/[\\/]/).some((part) => part.toLowerCase() === ".git");
 
 /** Both hosts mount this behind their token authentication. */
 export function createReviewApi(
@@ -187,6 +302,9 @@ export function createReviewApi(
 ) {
   const app = new Hono();
   app.onError((error, context) => {
+    if (error instanceof ViewerReadOnlyError)
+      return context.json(VIEWER_READ_ONLY, 403);
+
     if (error instanceof HttpJsonError)
       return context.json({ error: error.message }, error.statusCode);
 
@@ -200,20 +318,7 @@ export function createReviewApi(
         400,
       );
 
-    // Provider failures may contain local paths/subprocess output: the server
-    // log gets the cause, the response only its kind. Desktop routes this
-    // process's stderr to its main log.
-    console.error(
-      `[Review API] ${context.req.method} ${context.req.path} failed:`,
-      error,
-    );
-
-    return context.json(
-      {
-        error: `Whiteboard operation failed (${failureKind(error)}). The server logged the cause; Whiteboard Desktop writes it to main.log in its logs folder.`,
-      },
-      500,
-    );
+    return context.json({ error: loggedFailure(context, error) }, 500);
   });
 
   if (data)
@@ -285,22 +390,30 @@ export function createReviewApi(
     return snapshot;
   };
 
-  const catalog = (mode: "structural" | "textual" = "structural") => {
+  const catalog = (
+    mode: "structural" | "textual" = "structural",
+    remote = false,
+  ) => {
     const local = store.list(mode);
 
-    return [
+    const reviews = [
       ...(scratchpadEnabled()
         ? local
         : local.filter((summary) => summary.kind !== "scratchpad")),
       ...(shared?.list(mode) ?? []),
     ];
+
+    return remote ? reviews.map(remoteSummary) : reviews;
   };
 
   app.get("/", async (context) => {
     await ensureScratchpad();
 
     return context.json(
-      catalog(coverageModeSchema.parse(context.req.query("mode"))),
+      catalog(
+        coverageModeSchema.parse(context.req.query("mode")),
+        remoteCaller(context),
+      ),
     );
   });
 
@@ -341,6 +454,8 @@ export function createReviewApi(
       .parse(context.req.query());
 
     const snapshot = readReview(context.req.param("id"), query.version);
+    // A viewer's read must not start LLM summaries on this machine's keys.
+    const summaries = !viewerCaller(context);
 
     const documentPins =
       query.wait === "false" && snapshot.pins
@@ -352,6 +467,7 @@ export function createReviewApi(
         snapshot.reviewId,
         documentPins,
         query.mode,
+        summaries,
       );
 
       if (state.pending)
@@ -363,6 +479,7 @@ export function createReviewApi(
             context.req.raw.signal,
             query.mode,
             state.comparison,
+            summaries,
           ),
           202,
         );
@@ -375,6 +492,8 @@ export function createReviewApi(
         snapshot,
         context.req.raw.signal,
         query.mode,
+        undefined,
+        summaries,
       ),
     );
   });
@@ -441,7 +560,15 @@ export function createReviewApi(
       version: snapshot.version,
       ...lensReport(
         snapshot.lenses ?? [],
-        await reviewProgress(store, data, snapshot, context.req.raw.signal),
+        await reviewProgress(
+          store,
+          data,
+          snapshot,
+          context.req.raw.signal,
+          undefined,
+          undefined,
+          !viewerCaller(context),
+        ),
       ),
     });
   });
@@ -530,7 +657,7 @@ export function createReviewApi(
               return {
                 value:
                   reviewId === null
-                    ? catalog(mode)
+                    ? catalog(mode, remoteCaller(context))
                     : {
                         ...readReview(reviewId),
                         activity: store.activity.read(reviewId),
@@ -586,7 +713,11 @@ export function createReviewApi(
     await ensureScratchpad();
 
     return watch(
-      () => catalog(coverageModeSchema.parse(context.req.query("mode"))),
+      () =>
+        catalog(
+          coverageModeSchema.parse(context.req.query("mode")),
+          remoteCaller(context),
+        ),
       (notify) => {
         const local = store.subscribeCatalog(notify);
         const activity = store.activity.subscribeWorking(notify);
@@ -695,7 +826,116 @@ export function createReviewApi(
     );
   });
 
+  /**
+   * Every repository and commit a viewer may read for one review: what any
+   * of its versions pins, compares, or names in a reference within those
+   * repositories. Another registered repository stays closed.
+   */
+  const viewerScope = async (id: string) => {
+    const versions = isShared(id)
+      ? [readReview(id)]
+      : store.history(id).map(({ version }) => store.read(id, version));
+
+    // A live review compares with the checkout as it is now, past the pins
+    // its versions saved.
+    const latest = readReview(id);
+
+    const live =
+      latest.target?.kind === "worktree"
+        ? await data?.sourcePins(latest).catch(() => undefined)
+        : undefined;
+
+    const pinned = [
+      ...versions.flatMap((snapshot) => (snapshot.pins ? [snapshot.pins] : [])),
+      ...(live ? [live] : []),
+    ];
+
+    const repositories = new Set(pinned.map((pins) => pins.repositoryId));
+    const commits = new Set<string>();
+
+    for (const pins of [
+      ...pinned,
+      ...versions.flatMap((snapshot) =>
+        explicitPins(sourceReferences(snapshot.document, { tolerant: true })),
+      ),
+    ])
+      if (repositories.has(pins.repositoryId))
+        commits.add(pins.base).add(pins.head);
+
+    return {
+      repositories,
+      commits,
+      /** Adds each version's commit range, read only when a pin falls short. */
+      ranges: async () => {
+        for (const pins of pinned)
+          for (const commit of (await data?.commits(pins).catch(() => [])) ??
+            [])
+            commits.add(commit.commit).add(commit.parentCommit);
+      },
+    };
+  };
+
+  /** A viewer reads this review's own source only; anyone else, as asked. */
+  const assertViewerSource = async (
+    context: Context,
+    id: string,
+    request: { commit?: string; anchor?: SourcePins },
+  ) => {
+    const named = [
+      request.commit,
+      request.anchor?.head,
+      request.anchor?.base,
+    ].filter((commit) => commit !== undefined);
+
+    if (!viewerCaller(context) || named.length === 0) return;
+    const scope = await viewerScope(id);
+
+    if (request.anchor && !scope.repositories.has(request.anchor.repositoryId))
+      throw new ViewerReadOnlyError();
+
+    if (named.every((commit) => scope.commits.has(commit))) return;
+    await scope.ranges();
+
+    if (!named.every((commit) => scope.commits.has(commit)))
+      throw new ViewerReadOnlyError();
+  };
+
+  /**
+   * A viewer reads no Git internals, and of a live checkout only what its
+   * review shows: tracked files and its changes, never an untracked or
+   * ignored file such as .env.
+   */
+  const assertViewerFile = async (
+    context: Context,
+    pins: Pins,
+    side: "base" | "head",
+    file: string,
+  ) => {
+    if (!viewerCaller(context)) return;
+
+    if (
+      gitPath(file) ||
+      (pins.worktreeRevision &&
+        side === "head" &&
+        !(await data?.showsWorkingFile(pins, file)))
+    )
+      throw new ViewerReadOnlyError();
+  };
+
   if (data) {
+    /** The source a read names, kept to the review for a viewer. */
+    const readSource = async (
+      context: Context,
+      id: string,
+      input: { version?: number; commit?: string },
+      anchor: SourcePins | undefined,
+    ) => {
+      const snapshot = readReview(id, input.version);
+      await assertViewerSource(context, id, { commit: input.commit, anchor });
+
+      return data.resolveSource(snapshot, input.commit, anchor);
+    };
+
     const traceQuery = readQuerySchemas.maps.extend({
       storage: z.enum(["s3", "hosted"]).optional(),
       trace: z.string().min(1).optional(),
@@ -714,6 +954,11 @@ export function createReviewApi(
       return pins;
     };
 
+    const traceCaller = (context: Context) => ({
+      viewer: viewerCaller(context),
+      remote: remoteCaller(context),
+    });
+
     app.get("/:id/agent-traces", async (context) => {
       const query = traceQuery.parse(context.req.query());
       const pins = tracePins(context.req.param("id"), query.version);
@@ -723,18 +968,35 @@ export function createReviewApi(
           store.repositoryPath(pins.repositoryId),
           pins,
           query.storage,
+          traceCaller(context),
         ),
       );
     });
     app.get("/:id/agent-traces/:sessionId", async (context) => {
       const query = traceQuery.parse(context.req.query());
       const pins = tracePins(context.req.param("id"), query.version);
+      const sessionId = context.req.param("sessionId");
+
+      // The trace store holds every session of the repository; a viewer
+      // reads only those the review's commits name.
+      if (viewerCaller(context)) {
+        const listed = await listPinnedTraces(
+          store.repositoryPath(pins.repositoryId),
+          pins,
+          query.storage,
+          traceCaller(context),
+        );
+
+        if (!listed.sessions.some((session) => session.sessionId === sessionId))
+          throw new ViewerReadOnlyError();
+      }
 
       const result = await readStoredTrace(
         store.repositoryPath(pins.repositoryId),
-        context.req.param("sessionId"),
+        sessionId,
         query.trace,
         query.storage,
+        traceCaller(context),
       );
 
       if (!result.ok)
@@ -771,9 +1033,10 @@ export function createReviewApi(
     app.get("/:id/tree", async (context) => {
       const input = readQuerySchemas.tree.parse(context.req.query());
 
-      const { pins } = await data.resolveSource(
-        readReview(context.req.param("id"), input.version),
-        input.commit,
+      const { pins } = await readSource(
+        context,
+        context.req.param("id"),
+        input,
         queryAnchor(input),
       );
 
@@ -920,11 +1183,8 @@ export function createReviewApi(
 
       const anchor = queryAnchor(input);
 
-      const { snapshot, pins } = await data.resolveSource(
-        readReview(id, input.version),
-        input.commit,
-        anchor,
-      );
+      const { snapshot, pins } = await readSource(context, id, input, anchor);
+      await assertViewerFile(context, pins, input.side, input.file);
 
       const file = await data.file(
         pins,
@@ -957,11 +1217,7 @@ export function createReviewApi(
       const input = readQuerySchemas.structuralDiff.parse(context.req.query());
       const id = context.req.param("id");
 
-      const { pins } = await data.resolveSource(
-        readReview(id, input.version),
-        input.commit,
-        queryAnchor(input),
-      );
+      const { pins } = await readSource(context, id, input, queryAnchor(input));
 
       const abort = new AbortController();
       const encoder = new TextEncoder();
@@ -973,19 +1229,26 @@ export function createReviewApi(
               controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
           };
 
+          const remote = remoteCaller(context);
+
           try {
             for await (const event of data.structuralChanges({
               reviewId: id,
               pins,
               signal: AbortSignal.any([context.req.raw.signal, abort.signal]),
               file: input.file,
+              summaries: !viewerCaller(context),
             }))
-              send(event);
+              send(remote ? remoteStructuralEvent(context, event) : event);
           } catch (error) {
-            send({
-              type: "error",
-              message: error instanceof Error ? error.message : String(error),
-            });
+            if (!abort.signal.aborted)
+              send({
+                type: "error",
+                message: streamFailure(
+                  context,
+                  error instanceof Error ? error : new Error(String(error)),
+                ),
+              });
           } finally {
             if (!abort.signal.aborted) controller.close();
           }
@@ -1005,9 +1268,10 @@ export function createReviewApi(
     app.get("/:id/diff", async (context) => {
       const input = readQuerySchemas.diff.parse(context.req.query());
 
-      const { pins } = await data.resolveSource(
-        readReview(context.req.param("id"), input.version),
-        input.commit,
+      const { pins } = await readSource(
+        context,
+        context.req.param("id"),
+        input,
         queryAnchor(input),
       );
 
@@ -1038,12 +1302,35 @@ export function createReviewApi(
       await readBoundedRequestJson(context.req.raw),
     );
 
+    const id = context.req.param("id");
+    const source = selection.apiSource;
+
+    // The quoted code is read as /file reads it, so a viewer is kept to the
+    // same review source.
+    if (viewerCaller(context)) {
+      await assertViewerSource(context, id, {
+        commit: source?.commit,
+        anchor: source?.pins,
+      });
+
+      if (selection.target.kind === "code" && !selection.selectedDiff && data) {
+        const { pins } = await data.resolveSource(
+          readReview(id, source?.version ?? query.version),
+          source?.commit,
+          source?.pins,
+        );
+
+        await assertViewerFile(
+          context,
+          pins,
+          selection.target.side,
+          selection.target.path,
+        );
+      }
+    }
+
     return context.json({
-      text: await selectionContext(
-        context.req.param("id"),
-        selection,
-        query.version,
-      ),
+      text: await selectionContext(id, selection, query.version),
     });
   });
 
@@ -1602,7 +1889,10 @@ export function createReviewApi(
     const id = context.req.param("id");
     const snapshot = readReview(id, query.version);
 
-    if (isShared(id) || !snapshot.pins) return context.json({ layers: [] });
+    // Stack discovery asks GitHub with this machine's login; a viewer does
+    // not spend it.
+    if (isShared(id) || !snapshot.pins || viewerCaller(context))
+      return context.json({ layers: [] });
     const layers = await resolveReviewStackLayers(snapshot, store.list());
 
     return context.json({ layers });

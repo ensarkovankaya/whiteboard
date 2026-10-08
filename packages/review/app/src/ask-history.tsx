@@ -79,6 +79,8 @@ export function AskHistoryProvider({
   const reads = useRef(0);
 
   const refresh = useCallback(() => {
+    // A viewer has no Ask: its token cannot read another machine's threads.
+    if (session.readOnly === true) return;
     const read = ++reads.current;
 
     void session

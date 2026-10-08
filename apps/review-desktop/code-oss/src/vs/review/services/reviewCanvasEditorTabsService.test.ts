@@ -10,7 +10,8 @@ import { Event } from "../../base/common/event.js";
 import { ReviewCanvasEditorInput } from "../browser/parts/canvas/reviewCanvasEditorInput.js";
 import { ReviewCanvasEditorTabsService } from "./reviewCanvasEditorTabsService.js";
 
-async function closeWelcome(updateNeeded: boolean): Promise<number> {
+async function closeWelcome(updateNeeded: boolean, access: "full" | "viewer" = "full"): Promise<{ read: number; finished: number }> {
+	let read = 0;
 	let finished = 0;
 	const instantiation = {
 		createInstance(_ctor: unknown, target: never) {
@@ -20,7 +21,11 @@ async function closeWelcome(updateNeeded: boolean): Promise<number> {
 	const editors = { onDidCloseEditor: Event.None, async openEditor() {} };
 	const groups = { groups: [], mainPart: { activeGroup: undefined } };
 	const connection = {
+		async getConnection() {
+			return { access };
+		},
 		async getCliInstallStatus() {
+			read += 1;
 			return { updateNeeded };
 		},
 		async finishCliInstallUpdate() {
@@ -39,13 +44,17 @@ async function closeWelcome(updateNeeded: boolean): Promise<number> {
 		const welcome = await tabs.openWelcome(true);
 		welcome.dispose();
 		await new Promise((resolve) => setImmediate(resolve));
-		return finished;
+		return { read, finished };
 	} finally {
 		tabs.dispose();
 	}
 }
 
 test("closing Welcome finishes the CLI install update only when one is pending", async () => {
-	assert.equal(await closeWelcome(true), 1);
-	assert.equal(await closeWelcome(false), 0);
+	assert.deepEqual(await closeWelcome(true), { read: 1, finished: 1 });
+	assert.deepEqual(await closeWelcome(false), { read: 1, finished: 0 });
+});
+
+test("closing Welcome as a viewer leaves the server machine's install alone", async () => {
+	assert.deepEqual(await closeWelcome(true, "viewer"), { read: 0, finished: 0 });
 });
