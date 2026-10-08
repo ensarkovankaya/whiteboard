@@ -261,8 +261,6 @@ function remoteStructuralEvent(
         };
 
       return event;
-    case "annotations":
-      return event.error ? { ...event, error: hidden(event.error) } : event;
     case "complete":
       return event.aborted
         ? { ...event, aborted: hidden(event.aborted) }

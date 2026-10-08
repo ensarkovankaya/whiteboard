@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import * as diffr from "@dev.fast/diffr";
 import type { JsonObject } from "@dev.fast/json";
 import { STRUCTURAL_DIFF_WIRE_VERSION } from "@dev.fast/review-protocol";
 import { openLocalReviewStore } from "@review/review-api/local-data.js";
@@ -44,6 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await Promise.all(stops.splice(0).map((stop) => stop()));
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1088,7 +1090,7 @@ echo '[{"pull_requests":[{"number":2,"head":{"ref":"feature"}}]}]'
     await mkdir(path.join(xdg, "git"), { recursive: true });
     await writeFile(path.join(xdg, "git", "ignore"), ".env\n");
     const log = path.join(root, "diffr.log");
-    const diffr = path.join(root, "fake-diffr");
+    const fakeDiffr = path.join(root, "fake-diffr");
 
     const settings = [
       "version = 1",
@@ -1104,7 +1106,7 @@ echo '[{"pull_requests":[{"number":2,"head":{"ref":"feature"}}]}]'
     ].join("\n");
 
     await writeFile(
-      diffr,
+      fakeDiffr,
       `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -1131,10 +1133,12 @@ emit({ type: "complete", succeeded: 0, failed: 0 });
 `,
       { mode: 0o755 },
     );
-    vi.stubEnv("REVIEW_DIFFR_BINARY", diffr);
     vi.stubEnv("XDG_CONFIG_HOME", xdg);
 
     const { live, read, server } = await fixture();
+
+    // After startup: the server migrates diffr settings as it listens.
+    vi.spyOn(diffr, "diffrBinaryPath").mockReturnValue(fakeDiffr);
 
     const runs = async () =>
       (await readFile(log, "utf8").catch(() => ""))
@@ -1203,10 +1207,10 @@ emit({ type: "complete", succeeded: 0, failed: 0 });
 
   it("tells a viewer which part of a structural diff failed without diffr's paths", async () => {
     // Stands in for diffr: every problem it reports names the checkout it read.
-    const diffr = path.join(root, "fake-diffr");
+    const fakeDiffr = path.join(root, "fake-diffr");
 
     await writeFile(
-      diffr,
+      fakeDiffr,
       `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === "config") {
@@ -1237,18 +1241,29 @@ emit({
       fallback: problem("parse_failed"),
     },
     structural_changes: { base: [], head: [[0, 1]] },
-    rhs: { text: "b\\n" },
+    rhs: {
+      text: "b\\n",
+      root: {
+        id: 0,
+        fold_state_id: 0,
+        start: { line: 0, column: 0 },
+        end: { line: 1, column: 0 },
+        kind: "leaf",
+        alignment_id: 0,
+      },
+    },
   },
 });
-emit({ type: "annotations", file: b, annotations: [], error: problem("internal") });
 emit({ type: "complete", succeeded: 1, failed: 1, aborted: problem("internal") });
 process.exitCode = 2;
 `,
       { mode: 0o755 },
     );
-    vi.stubEnv("REVIEW_DIFFR_BINARY", diffr);
 
     const { commits, read, repo, server } = await fixture();
+
+    // After startup: the server migrates diffr settings as it listens.
+    vi.spyOn(diffr, "diffrBinaryPath").mockReturnValue(fakeDiffr);
 
     const frames = async (token?: string) =>
       (await (await read(`/${commits}/structural-diff`, token)).text())
@@ -1277,7 +1292,6 @@ process.exitCode = 2;
     expect(problems(viewed).map(({ code }) => code)).toEqual([
       "read_failed",
       "parse_failed",
-      "internal",
       "internal",
     ]);
     expect(shown).not.toContain(repo);
